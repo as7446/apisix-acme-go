@@ -1,0 +1,37 @@
+listen: ":8080"
+
+# 用于 HTTP 接口鉴权：Authorization: Bearer <token>
+bearer_token: "changeme"
+
+apisix_admin_url: "http://127.0.0.1:9180"
+apisix_admin_token: "your-apisix-admin-token"
+
+default_email: "admin@example.com"
+
+storage_dir: "out"
+
+# 每天凌晨 3 点执行续期检查
+renew_cron: "0 0 3 * * *"
+
+# ACME 配置，可选
+acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+
+# lego 支持的 DNS Provider 名称，如 cloudflare, dnspod 等
+acme_dns_provider: ""
+
+# DNS Provider 所需的环境变量，如：
+# acme_dns_env:
+#   CF_DNS_API_TOKEN: "xxx"
+acme_dns_env: {}
+
+# 自动在 APISIX 中创建/更新 HTTP-01 路由
+challenge_route:
+  enable: true
+  route_id: "apisix_acme_http01"
+  hosts: []  # 可选，限定 Host
+  upstream_nodes:
+    - "127.0.0.1:8080"
+  upstream_scheme: "http"
+  priority: 0
+
+
