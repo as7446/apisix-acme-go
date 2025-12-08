@@ -1,0 +1,24 @@
+{
+  "test-us1.weimobtrade.com.cn": {
+    "domain": "test-1.xxxxx.com",
+    "snis": [
+      "test-1.xxxxx.com"
+    ],
+    "not_before": 1765176942,
+    "not_after": 1772952941,
+    "apisix_id": "test-1.xxxxx.com",
+    "created_at": 1765180452,
+    "updated_at": 1765180452
+  },
+  "test-us3.weimobtrade.com.cn": {
+    "domain": "test-2.xxxxx.com",
+    "snis": [
+      "test-2.xxxxx.com"
+    ],
+    "not_before": 1765165144,
+    "not_after": 1772941143,
+    "apisix_id": "test-2.xxxxx.com",
+    "created_at": 1765178946,
+    "updated_at": 1765178946
+  }
+}
