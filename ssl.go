@@ -87,7 +87,13 @@ func (s *FileCertStore) Save() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	if s.log != nil {
+		s.log.Printf("证书元数据已写入：path=%s", s.path)
+	}
+	return nil
 }
 
 func (s *FileCertStore) Upsert(meta *CertMeta) error {

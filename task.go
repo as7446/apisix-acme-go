@@ -140,6 +140,7 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 		}
 	}()
 
+	m.log.Printf("任务开始执行：domain=%s", domain)
 	m.updateTaskStatus(domain, TaskStatusRunning, "")
 	meta, err := m.acme.RequestCertificate(domain, email, force)
 	if err != nil {
@@ -153,7 +154,7 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 		m.updateTaskStatus(domain, TaskStatusError, "证书申请返回的元数据为空")
 		return
 	}
-	m.log.Printf("域名 %s 的证书申请任务成功完成", domain)
+	m.log.Printf("域名 %s 的证书申请任务成功完成：not_after=%d", domain, meta.NotAfter)
 	m.updateTaskStatus(domain, TaskStatusSuccess, "")
 }
 
