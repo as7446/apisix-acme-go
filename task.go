@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -127,12 +128,28 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 		m.runningMu.Unlock()
 	}()
 
+	// 添加 panic 恢复，确保状态总是被更新
+	defer func() {
+		if r := recover(); r != nil {
+			m.log.Printf("域名 %s 的证书申请任务发生 panic：%v", domain, r)
+			m.updateTaskStatus(domain, TaskStatusError, fmt.Sprintf("任务执行发生 panic: %v", r))
+		}
+	}()
+
 	m.updateTaskStatus(domain, TaskStatusRunning, "")
-	if _, err := m.acme.RequestCertificate(domain, email, force); err != nil {
+	meta, err := m.acme.RequestCertificate(domain, email, force)
+	if err != nil {
 		m.log.Printf("域名 %s 的证书申请任务失败：%v", domain, err)
 		m.updateTaskStatus(domain, TaskStatusError, err.Error())
 		return
 	}
+	// 确保证书申请和上传都成功
+	if meta == nil {
+		m.log.Printf("域名 %s 的证书申请任务失败：返回的元数据为空", domain)
+		m.updateTaskStatus(domain, TaskStatusError, "证书申请返回的元数据为空")
+		return
+	}
+	m.log.Printf("域名 %s 的证书申请任务成功完成", domain)
 	m.updateTaskStatus(domain, TaskStatusSuccess, "")
 }
 

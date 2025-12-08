@@ -14,6 +14,7 @@ type Config struct {
 	DefaultEmail     string `yaml:"default_email"`
 	StorageDir       string `yaml:"storage_dir"`
 	RenewCron        string `yaml:"renew_cron"`
+	RenewBeforeDays  int    `yaml:"renew_before_days"` // 证书到期前多少天开始续期
 	// ACME 配置
 	AcmeDirectoryURL string            `yaml:"acme_directory_url"`
 	AcmeDNSProvider  string            `yaml:"acme_dns_provider"`
@@ -49,6 +50,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.RenewCron == "" {
 		cfg.RenewCron = "0 0 3 * * *"
+	}
+	if cfg.RenewBeforeDays <= 0 {
+		cfg.RenewBeforeDays = 30 // 默认提前 30 天续期
 	}
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"

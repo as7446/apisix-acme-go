@@ -148,8 +148,9 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 			m.logger.Printf("APISIX 中证书不存在，需要申请：域名=%s", domain)
 			needNewCert = true
 		} else if apisixNotAfter > 0 {
-			// 检查 APISIX 中的证书是否即将过期（提前30天）
-			if apisixNotAfter-now <= int64(30*24*time.Hour/time.Second) {
+			// 检查 APISIX 中的证书是否即将过期
+			renewThreshold := int64(m.cfg.RenewBeforeDays * 24 * int(time.Hour/time.Second))
+			if apisixNotAfter-now <= renewThreshold {
 				m.logger.Printf("APISIX 中证书即将过期，需要续期：域名=%s, 过期时间=%s", domain, time.Unix(apisixNotAfter, 0).Format("2006-01-02 15:04:05"))
 				needNewCert = true
 			}
@@ -286,10 +287,11 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	return meta, nil
 }
 
-// NeedRenew 判断证书是否需要续期（提前 30 天）
+// NeedRenew 判断证书是否需要续期
 func (m *AcmeManager) NeedRenew(meta *CertMeta) bool {
 	now := time.Now().Unix()
-	return meta.NotAfter-now <= int64(30*24*time.Hour/time.Second)
+	renewThreshold := int64(m.cfg.RenewBeforeDays * 24 * int(time.Hour/time.Second))
+	return meta.NotAfter-now <= renewThreshold
 }
 
 func (m *AcmeManager) RenewAll() {
@@ -333,7 +335,8 @@ func (m *AcmeManager) RenewAll() {
 			}
 		} else if apisixNotAfter > 0 {
 			// 4. 如果 APISIX 中证书即将过期，需要续期
-			if apisixNotAfter-now <= int64(30*24*time.Hour/time.Second) {
+			renewThreshold := int64(m.cfg.RenewBeforeDays * 24 * int(time.Hour/time.Second))
+			if apisixNotAfter-now <= renewThreshold {
 				m.logger.Printf("APISIX 中证书即将过期，需要续期：域名=%s, 过期时间=%s", meta.Domain, time.Unix(apisixNotAfter, 0).Format("2006-01-02 15:04:05"))
 				needRenew = true
 			}
