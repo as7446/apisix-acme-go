@@ -135,11 +135,11 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	now := time.Now().Unix()
 	cached, hasCache := m.certCache.Get(domain)
 
-	// 2. 如果有有效缓存，直接覆盖 APISIX（不比较 APISIX 证书）
+	// 2. 如果有有效缓存，直接覆盖 APISIX
 	if hasCache && cached.NotAfter > now {
-		m.logger.Printf("使用缓存证书直接覆盖 APISIX：域名=%s, 过期时间=%s", domain, time.Unix(cached.NotAfter, 0).Format("2006-01-02 15:04:05"))
+		m.logger.Printf("缓存证书覆盖 APISIX：域名=%s, 过期时间=%s", domain, time.Unix(cached.NotAfter, 0).Format("2006-01-02 15:04:05"))
 		if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
-			return nil, fmt.Errorf("使用缓存上传证书到 APISIX 失败：%w", err)
+			return nil, fmt.Errorf("缓存上传证书到 APISIX 失败：%w", err)
 		}
 		meta := &CertMeta{
 			Domain:    domain,
@@ -234,7 +234,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		certPEM = string(certRes.Certificate)
 		keyPEM = string(certRes.PrivateKey)
 
-		// 保存到缓存（即使后续 APISIX 上传失败，证书也已缓存）
+		// 保存到缓存
 		if err := m.certCache.Put(domain, certPEM, keyPEM, notBefore, notAfter); err != nil {
 			m.logger.Printf("保存证书到缓存失败：%v", err)
 		}

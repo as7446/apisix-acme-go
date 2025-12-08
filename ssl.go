@@ -76,9 +76,13 @@ func (s *FileCertStore) Load() error {
 }
 
 func (s *FileCertStore) Save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked()
+}
 
+// saveLocked 在已持有互斥锁的情况下保存元数据
+func (s *FileCertStore) saveLocked() error {
 	tmp := s.path + ".tmp"
 	data, err := json.MarshalIndent(s.items, "", "  ")
 	if err != nil {
@@ -109,7 +113,7 @@ func (s *FileCertStore) Upsert(meta *CertMeta) error {
 	}
 	meta.UpdatedAt = now
 	s.items[meta.Domain] = meta
-	return s.Save()
+	return s.saveLocked()
 }
 
 func (s *FileCertStore) Get(domain string) (*CertMeta, bool) {
