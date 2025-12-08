@@ -20,6 +20,7 @@ type CertMeta struct {
 	NotBefore int64    `json:"not_before"` // 证书生效时间（Unix 时间戳）
 	NotAfter  int64    `json:"not_after"`  // 证书过期时间（Unix 时间戳）
 	APISIXID  string   `json:"apisix_id"`  // APISIX SSL 资源 ID
+	CreatedAt int64    `json:"created_at"` // 证书创建时间（Unix 时间戳）
 	UpdatedAt int64    `json:"updated_at"` // 更新时间（Unix 时间戳）
 }
 
@@ -86,7 +87,14 @@ func (s *FileCertStore) Upsert(meta *CertMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	meta.UpdatedAt = time.Now().Unix()
+	now := time.Now().Unix()
+	// 如果是新证书，设置创建时间；如果是更新，保留原有创建时间
+	if existing, ok := s.items[meta.Domain]; ok {
+		meta.CreatedAt = existing.CreatedAt
+	} else {
+		meta.CreatedAt = now
+	}
+	meta.UpdatedAt = now
 	s.items[meta.Domain] = meta
 	return s.Save()
 }

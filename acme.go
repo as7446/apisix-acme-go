@@ -95,7 +95,34 @@ func (m *AcmeManager) defaultClientInit(email string) (*lego.Client, error) {
 	return client, nil
 }
 
-func (m *AcmeManager) RequestCertificate(domain string, email string) (*CertMeta, error) {
+// CheckAPISIXCertificate 检查 APISIX 中的证书是否存在以及是否过期
+func (m *AcmeManager) CheckAPISIXCertificate(domain string) (exists bool, notAfter int64, err error) {
+	apisixID := domain
+	sslObj, err := m.apisix.GetCertificate(apisixID)
+	if err != nil {
+		return false, 0, fmt.Errorf("查询 APISIX 证书失败：%w", err)
+	}
+	if sslObj == nil {
+		return false, 0, nil // 证书不存在
+	}
+
+	// 解析证书获取过期时间
+	if sslObj.Cert == "" {
+		return true, 0, nil // 证书存在但无法解析
+	}
+	block, _ := pem.Decode([]byte(sslObj.Cert))
+	if block == nil {
+		return true, 0, nil // 证书存在但格式错误
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return true, 0, nil // 证书存在但解析失败
+	}
+	return true, cert.NotAfter.Unix(), nil
+}
+
+// RequestCertificate 申请或更新证书
+func (m *AcmeManager) RequestCertificate(domain string, email string, force bool) (*CertMeta, error) {
 	if email == "" {
 		email = m.cfg.DefaultEmail
 	}
@@ -103,10 +130,71 @@ func (m *AcmeManager) RequestCertificate(domain string, email string) (*CertMeta
 		return nil, fmt.Errorf("邮箱为空")
 	}
 
+	// 1. 检查本地元数据
+	localMeta, hasLocalMeta := m.store.Get(domain)
+	now := time.Now().Unix()
+
+	// 2. 检查 APISIX 中的证书状态
+	apisixExists, apisixNotAfter, err := m.CheckAPISIXCertificate(domain)
+	if err != nil {
+		m.logger.Printf("检查 APISIX 证书状态失败：域名=%s, 错误=%v，将继续处理", domain, err)
+	}
+
+	// 3. 判断是否需要申请新证书
+	needNewCert := force
+	if !needNewCert {
+		// 如果 APISIX 中证书不存在，需要申请
+		if !apisixExists {
+			m.logger.Printf("APISIX 中证书不存在，需要申请：域名=%s", domain)
+			needNewCert = true
+		} else if apisixNotAfter > 0 {
+			// 检查 APISIX 中的证书是否即将过期（提前30天）
+			if apisixNotAfter-now <= int64(30*24*time.Hour/time.Second) {
+				m.logger.Printf("APISIX 中证书即将过期，需要续期：域名=%s, 过期时间=%s", domain, time.Unix(apisixNotAfter, 0).Format("2006-01-02 15:04:05"))
+				needNewCert = true
+			}
+		}
+		// 如果本地有元数据但证书已过期，需要申请
+		if hasLocalMeta && localMeta.NotAfter <= now {
+			m.logger.Printf("本地证书已过期，需要申请：域名=%s", domain)
+			needNewCert = true
+		}
+	}
+
+	// 4. 如果不需要新证书，尝试从缓存或 APISIX 同步
+	if !needNewCert {
+		// 如果本地有有效证书，直接使用
+		if hasLocalMeta && localMeta.NotAfter > now {
+			// 检查缓存中是否有证书文件
+			if cached, ok := m.certCache.Get(domain); ok {
+				// 如果 APISIX 中证书不存在，需要上传
+				if !apisixExists {
+					m.logger.Printf("本地证书存在但 APISIX 中不存在，上传证书：域名=%s", domain)
+					if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
+						return nil, fmt.Errorf("上传证书到 APISIX 失败：%w", err)
+					}
+					// 更新元数据
+					localMeta.UpdatedAt = now
+					if err := m.store.Upsert(localMeta); err != nil {
+						m.logger.Printf("更新证书元数据失败：%v", err)
+					}
+					return localMeta, nil
+				}
+				// 如果 APISIX 中证书存在且有效，直接返回
+				if apisixExists && apisixNotAfter > now {
+					m.logger.Printf("证书已存在且有效，跳过申请：域名=%s", domain)
+					return localMeta, nil
+				}
+			}
+		}
+	}
+
+	// 5. 需要申请新证书
 	var certPEM, keyPEM string
 	var notBefore, notAfter int64
 
-	if cached, ok := m.certCache.Get(domain); ok {
+	if cached, ok := m.certCache.Get(domain); ok && !force {
+		// 如果缓存中有有效证书且不是强制申请，使用缓存
 		m.logger.Printf("使用缓存的证书：域名=%s", domain)
 		certPEM = cached.CertPEM
 		keyPEM = cached.KeyPEM
@@ -206,13 +294,57 @@ func (m *AcmeManager) NeedRenew(meta *CertMeta) bool {
 
 func (m *AcmeManager) RenewAll() {
 	list := m.store.All()
+	now := time.Now().Unix()
+
 	for _, meta := range list {
-		if !m.NeedRenew(meta) {
-			continue
+		// 1. 检查本地证书是否需要续期
+		needRenew := m.NeedRenew(meta)
+
+		// 2. 检查 APISIX 中的证书状态
+		apisixExists, apisixNotAfter, err := m.CheckAPISIXCertificate(meta.Domain)
+		if err != nil {
+			m.logger.Printf("检查 APISIX 证书状态失败：域名=%s, 错误=%v", meta.Domain, err)
 		}
-		m.logger.Printf("开始续期证书：域名=%s", meta.Domain)
-		if _, err := m.RequestCertificate(meta.Domain, ""); err != nil {
-			m.logger.Printf("续期证书失败：域名=%s, 错误=%v（证书可能已缓存，可手动重试）", meta.Domain, err)
+
+		// 3. 如果 APISIX 中证书不存在，需要上传
+		if !apisixExists {
+			m.logger.Printf("APISIX 中证书不存在，尝试上传本地证书：域名=%s", meta.Domain)
+			if cached, ok := m.certCache.Get(meta.Domain); ok {
+				// 检查缓存证书是否有效
+				if cached.NotAfter > now {
+					if err := m.apisix.UpsertCertificate(meta.Domain, []string{meta.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
+						m.logger.Printf("上传证书到 APISIX 失败：域名=%s, 错误=%v", meta.Domain, err)
+					} else {
+						m.logger.Printf("证书已上传到 APISIX：域名=%s", meta.Domain)
+						// 更新元数据
+						meta.UpdatedAt = now
+						if err := m.store.Upsert(meta); err != nil {
+							m.logger.Printf("更新证书元数据失败：%v", err)
+						}
+						continue
+					}
+				} else {
+					m.logger.Printf("本地缓存证书已过期，需要重新申请：域名=%s", meta.Domain)
+					needRenew = true
+				}
+			} else {
+				m.logger.Printf("本地缓存证书不存在，需要重新申请：域名=%s", meta.Domain)
+				needRenew = true
+			}
+		} else if apisixNotAfter > 0 {
+			// 4. 如果 APISIX 中证书即将过期，需要续期
+			if apisixNotAfter-now <= int64(30*24*time.Hour/time.Second) {
+				m.logger.Printf("APISIX 中证书即将过期，需要续期：域名=%s, 过期时间=%s", meta.Domain, time.Unix(apisixNotAfter, 0).Format("2006-01-02 15:04:05"))
+				needRenew = true
+			}
+		}
+
+		// 5. 如果需要续期，执行续期操作
+		if needRenew {
+			m.logger.Printf("开始续期证书：域名=%s", meta.Domain)
+			if _, err := m.RequestCertificate(meta.Domain, "", false); err != nil {
+				m.logger.Printf("续期证书失败：域名=%s, 错误=%v（证书可能已缓存，可手动重试）", meta.Domain, err)
+			}
 		}
 	}
 }
