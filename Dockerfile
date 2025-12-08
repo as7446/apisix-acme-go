@@ -5,11 +5,11 @@ ARG GO_VERSION=1.24
 FROM golang:${GO_VERSION} AS builder
 WORKDIR /src
 
- ARG USE_CN_MIRROR
- RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
-         go env -w GOPROXY=https://goproxy.cn,direct && \
-         echo "Using goproxy.cn"; \
-     fi
+ARG USE_CN_MIRROR
+RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
+     go env -w GOPROXY=https://goproxy.cn,direct && \
+     echo "Using goproxy.cn"; \
+ fi
 COPY go.mod go.sum ./
 RUN go mod download
 
