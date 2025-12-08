@@ -1,0 +1,42 @@
+project_name: apisix-acme-go
+
+builds:
+  - id: apisix-acme-go
+    main: .
+    binary: apisix-acme-go
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+
+archives:
+  - id: archive
+    format: tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+nfpms:
+  - id: packages
+    formats:
+      - deb
+      - rpm
+    package_name: apisix-acme-go
+    description: "APISIX ACME automatic certificate manager"
+    license: MIT
+    homepage: "https://github.com/as7446/apisix-acme-go"
+    bindir: /usr/local/bin
+    arch:
+      - amd64
+      - arm64
+
+checksum:
+  name_template: "checksums.txt"
+
+release:
+  github:
+    owner: as7446
+    name: apisix-acme-go
