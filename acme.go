@@ -212,11 +212,11 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		}
 		certRes, err := client.Certificate.Obtain(req)
 		if err != nil {
-			errMsg := fmt.Sprintf("申请证书失败：%w", err)
+			errMsg := fmt.Sprintf("申请证书失败：%v", err)
 			if strings.Contains(err.Error(), "invalid character '<'") {
 				errMsg += "（DNS Provider API 返回了 HTML 而非 JSON，可能是 API Token/Key 无效或配置错误）"
 			}
-			return nil, fmt.Errorf(errMsg)
+			return nil, fmt.Errorf("%s", errMsg)
 		}
 
 		// 解析证书有效期
