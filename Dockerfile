@@ -25,13 +25,13 @@ WORKDIR /app
 
 ARG USE_CN_MIRROR=true
 RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
- echo "Using CN mirror: aliyun"; \
- sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && \
- sed -i 's|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources ; \
-fi \
-&& apt-get update \
-&& apt-get install -y --no-install-recommends ca-certificates tzdata curl \
-&& rm -rf /var/lib/apt/lists/* \
+    echo "Using CN mirror: aliyun"; \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && \
+    sed -i 's|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources ; \
+    fi \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/apisix-acme-go /usr/local/bin/apisix-acme-go
 COPY config.example.yml /app/config.example.yml
