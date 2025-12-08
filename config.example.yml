@@ -13,6 +13,9 @@ storage_dir: "out"
 # 每天凌晨 3 点执行续期检查
 renew_cron: "0 0 3 * * *"
 
+# 证书到期前多少天开始续期（默认 30 天）
+renew_before_days: 30
+
 # ACME 配置，可选
 acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
 

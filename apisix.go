@@ -41,6 +41,44 @@ func normalizeAPISIXID(domain string) string {
 	return strings.ReplaceAll(domain, "*.", "wildcard.")
 }
 
+// GetCertificate 从 APISIX 获取证书信息
+func (c *ApisixClient) GetCertificate(id string) (*ApisixSSLObject, error) {
+	normalizedID := normalizeAPISIXID(id)
+	url := c.resourceURL("ssl", normalizedID)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败：%w", err)
+	}
+	if c.token != "" {
+		req.Header.Set("X-API-KEY", c.token)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 APISIX 失败：%w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil // 证书不存在，返回 nil 而不是错误
+	}
+
+	if resp.StatusCode >= 300 {
+		var respBody bytes.Buffer
+		respBody.ReadFrom(resp.Body)
+		return nil, fmt.Errorf("APISIX 查询证书失败，状态码=%d, 响应=%s", resp.StatusCode, respBody.String())
+	}
+
+	var result struct {
+		Value ApisixSSLObject `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("解析响应失败：%w", err)
+	}
+
+	return &result.Value, nil
+}
+
 // UpsertCertificate 在 APISIX 中创建或更新证书
 func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyPEM string, expiresAt int64) error {
 	normalizedID := normalizeAPISIXID(id)

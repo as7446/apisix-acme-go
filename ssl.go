@@ -15,12 +15,13 @@ type Logger interface {
 }
 
 type CertMeta struct {
-	Domain    string   `json:"domain"`     // 域名
-	SNIs      []string `json:"snis"`       // APISIX SNI 列表
-	NotBefore int64    `json:"not_before"` // 证书生效时间（Unix 时间戳）
-	NotAfter  int64    `json:"not_after"`  // 证书过期时间（Unix 时间戳）
-	APISIXID  string   `json:"apisix_id"`  // APISIX SSL 资源 ID
-	UpdatedAt int64    `json:"updated_at"` // 更新时间（Unix 时间戳）
+	Domain    string   `json:"domain"`
+	SNIs      []string `json:"snis"`
+	NotBefore int64    `json:"not_before"`
+	NotAfter  int64    `json:"not_after"`
+	APISIXID  string   `json:"apisix_id"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
 }
 
 type CachedCert struct {
@@ -41,13 +42,17 @@ type FileCertStore struct {
 
 func NewFileCertStore(cfg *Config, logger Logger) *FileCertStore {
 	dir := cfg.StorageDir
-	_ = os.MkdirAll(dir, 0o755)
-	return &FileCertStore{
+	_ = os.MkdirAll(dir, 0755)
+	store := &FileCertStore{
 		dir:   dir,
 		path:  filepath.Join(dir, "certs.json"),
 		items: make(map[string]*CertMeta),
 		log:   logger,
 	}
+	if logger != nil {
+		logger.Printf("证书元数据存储初始化：dir=%s, file=%s", dir, store.path)
+	}
+	return store
 }
 
 func (s *FileCertStore) Load() error {
@@ -57,6 +62,9 @@ func (s *FileCertStore) Load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if s.log != nil {
+				s.log.Printf("证书元数据文件不存在，将在首次保存时创建：path=%s", s.path)
+			}
 			return nil
 		}
 		return err
@@ -68,9 +76,13 @@ func (s *FileCertStore) Load() error {
 }
 
 func (s *FileCertStore) Save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveLocked()
+}
 
+// saveLocked 在已持有互斥锁的情况下保存元数据
+func (s *FileCertStore) saveLocked() error {
 	tmp := s.path + ".tmp"
 	data, err := json.MarshalIndent(s.items, "", "  ")
 	if err != nil {
@@ -79,16 +91,29 @@ func (s *FileCertStore) Save() error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	if s.log != nil {
+		s.log.Printf("证书元数据已写入：path=%s", s.path)
+	}
+	return nil
 }
 
 func (s *FileCertStore) Upsert(meta *CertMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	meta.UpdatedAt = time.Now().Unix()
+	now := time.Now().Unix()
+	// 如果是新证书，设置创建时间；如果是更新，保留原有创建时间
+	if existing, ok := s.items[meta.Domain]; ok {
+		meta.CreatedAt = existing.CreatedAt
+	} else {
+		meta.CreatedAt = now
+	}
+	meta.UpdatedAt = now
 	s.items[meta.Domain] = meta
-	return s.Save()
+	return s.saveLocked()
 }
 
 func (s *FileCertStore) Get(domain string) (*CertMeta, bool) {
@@ -116,7 +141,7 @@ type CertCache struct {
 
 func NewCertCache(cfg *Config, logger Logger) *CertCache {
 	dir := cfg.StorageDir
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0755)
 	return &CertCache{
 		dir: dir,
 		log: logger,
