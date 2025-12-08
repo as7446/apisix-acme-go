@@ -43,12 +43,16 @@ type FileCertStore struct {
 func NewFileCertStore(cfg *Config, logger Logger) *FileCertStore {
 	dir := cfg.StorageDir
 	_ = os.MkdirAll(dir, 0755)
-	return &FileCertStore{
+	store := &FileCertStore{
 		dir:   dir,
 		path:  filepath.Join(dir, "certs.json"),
 		items: make(map[string]*CertMeta),
 		log:   logger,
 	}
+	if logger != nil {
+		logger.Printf("证书元数据存储初始化：dir=%s, file=%s", dir, store.path)
+	}
+	return store
 }
 
 func (s *FileCertStore) Load() error {
@@ -58,6 +62,9 @@ func (s *FileCertStore) Load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if s.log != nil {
+				s.log.Printf("证书元数据文件不存在，将在首次保存时创建：path=%s", s.path)
+			}
 			return nil
 		}
 		return err

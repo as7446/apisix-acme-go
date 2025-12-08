@@ -53,6 +53,7 @@ func NewTaskManager(store *FileCertStore, acme *AcmeManager, logger Logger) *Tas
 // - 如果任务正在运行 => status=running
 // - 否则创建新任务并异步执行 => status=created
 func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool) *Task {
+	m.log.Printf("收到任务请求：domain=%s, email=%s, force=%v", domain, email, force)
 	m.mu.Lock()
 
 	// 1. 检查是否已有任务正在运行
@@ -66,6 +67,7 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 			return t
 		}
 		// 如果任务状态不是 running，清除运行标记
+		m.log.Printf("域名 %s 的任务运行标记存在但状态非 running，清理标记后继续", domain)
 		delete(m.runningSet, domain)
 	}
 	m.runningMu.Unlock()
@@ -112,6 +114,7 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 	m.runningMu.Unlock()
 
 	m.mu.Unlock()
+	m.log.Printf("任务进入运行队列：domain=%s", domain)
 
 	// 5. 异步执行任务
 	go m.runTask(domain, email, force)
@@ -126,6 +129,7 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 		m.runningMu.Lock()
 		delete(m.runningSet, domain)
 		m.runningMu.Unlock()
+		m.log.Printf("任务运行标记已释放：domain=%s", domain)
 	}()
 
 	// 添加 panic 恢复，确保状态总是被更新
@@ -157,7 +161,13 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 func (m *TaskManager) updateTaskStatus(domain string, status TaskStatus, errMsg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	prevStatus := TaskStatus("")
+	prevErr := ""
+
 	if t, ok := m.tasks[domain]; ok {
+		prevStatus = t.Status
+		prevErr = t.Error
 		t.Status = status
 		t.Error = errMsg
 	} else {
@@ -167,6 +177,7 @@ func (m *TaskManager) updateTaskStatus(domain string, status TaskStatus, errMsg 
 			Error:  errMsg,
 		}
 	}
+	m.log.Printf("任务状态更新：domain=%s, %s -> %s, err_prev=%s, err_now=%s", domain, prevStatus, status, prevErr, errMsg)
 }
 
 // GetTask 获取任务状态
