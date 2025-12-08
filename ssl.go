@@ -15,13 +15,13 @@ type Logger interface {
 }
 
 type CertMeta struct {
-	Domain    string   `json:"domain"`     // 域名
-	SNIs      []string `json:"snis"`       // APISIX SNI 列表
-	NotBefore int64    `json:"not_before"` // 证书生效时间（Unix 时间戳）
-	NotAfter  int64    `json:"not_after"`  // 证书过期时间（Unix 时间戳）
-	APISIXID  string   `json:"apisix_id"`  // APISIX SSL 资源 ID
-	CreatedAt int64    `json:"created_at"` // 证书创建时间（Unix 时间戳）
-	UpdatedAt int64    `json:"updated_at"` // 更新时间（Unix 时间戳）
+	Domain    string   `json:"domain"`
+	SNIs      []string `json:"snis"`
+	NotBefore int64    `json:"not_before"`
+	NotAfter  int64    `json:"not_after"`
+	APISIXID  string   `json:"apisix_id"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
 }
 
 type CachedCert struct {
@@ -42,7 +42,7 @@ type FileCertStore struct {
 
 func NewFileCertStore(cfg *Config, logger Logger) *FileCertStore {
 	dir := cfg.StorageDir
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0755)
 	return &FileCertStore{
 		dir:   dir,
 		path:  filepath.Join(dir, "certs.json"),
@@ -124,7 +124,7 @@ type CertCache struct {
 
 func NewCertCache(cfg *Config, logger Logger) *CertCache {
 	dir := cfg.StorageDir
-	_ = os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0755)
 	return &CertCache{
 		dir: dir,
 		log: logger,
