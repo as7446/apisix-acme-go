@@ -4,7 +4,7 @@ project_name: apisix-acme-go
 
 builds:
   - id: main
-    main: ./cmd/apisix-acme
+    main: .
     binary: apisix-acme
     goos:
       - linux
