@@ -1,11 +1,11 @@
 # apisix-acme-go
 
-使用 Go 语言实现的 APISIX 证书自动申请与续期服务，参考了项目 [`TMaize/apisix-acme`](https://github.com/TMaize/apisix-acme)。
+Go 实现的 APISIX 证书自动申请与续期服务，参考了项目 [`TMaize/apisix-acme`](https://github.com/TMaize/apisix-acme)。
 
 ## 功能特性
 
 - **自动申请证书**：通过 ACME（默认 Let's Encrypt）为域名签发证书
-- **自动续期**：定时扫描即将过期的证书并自动续期（提前 30 天）
+- **自动续期**：定时扫描即将过期的证书并自动续期
 - **多种验证方式**：支持 HTTP-01 和 DNS-01 两种 ACME 验证方式
 
 ## 快速开始
@@ -14,7 +14,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-org/apisix-acme-go.git
+git clone https://github.com/as7446/apisix-acme-go.git
 cd apisix-acme-go
 
 # 编译
@@ -45,7 +45,7 @@ cp config.example.yml config.yml
 ./apisix-acme-go
 ```
 
-服务默认监听 `:8080`，可通过 `listen` 配置项修改。
+服务默认监听 `:8080`
 
 ### 4. 创建证书任务
 
@@ -79,14 +79,6 @@ curl -X POST "http://127.0.0.1:8080/apisix_acme/task_create" \
 }
 ```
 
-**任务状态说明：**
-
-- `created`: 任务已创建，正在处理
-- `running`: 证书申请中
-- `success`: 证书申请成功
-- `error`: 证书申请失败（查看 `error` 字段获取详情）
-- `skip`: 证书已存在且未过期，跳过操作
-
 ### 5. 查询任务状态
 
 ```bash
@@ -106,8 +98,6 @@ curl "http://127.0.0.1:8080/apisix_acme/task_status?domain=example.com" \
 }
 ```
 
-
-
 #### 配置方式
 
 **方式一：自动创建验证路由（推荐）**
@@ -124,16 +114,6 @@ challenge_route:
   upstream_scheme: "http"
   priority: 2000  # 建议设置较高优先级，确保优先匹配
 ```
-
-**说明：**
-
-- `enable: true`: 启用自动创建验证路由
-- `route_id`: APISIX 路由 ID，默认 `apisix_acme_http01`
-- `hosts`: 路由匹配的 Host 列表，为空则匹配所有 Host
-- `upstream_nodes`: 上游节点列表，应指向本服务的监听地址
-- `upstream_scheme`: 上游协议，通常为 `http`
-- `priority`: 路由优先级，建议设置较高值（如 2000）确保优先匹配
-
 
 **方式二：手动创建验证路由**
 
@@ -257,10 +237,6 @@ GET /apisix_acme/tool.html
 ```bash
 # 本地构建
 go build -o apisix-acme-go .
-
-# 交叉编译
-make build-amd64  # Linux amd64
-make build-arm64  # Linux arm64
 ```
 
 ### Docker 构建
