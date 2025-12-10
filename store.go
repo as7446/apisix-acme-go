@@ -143,6 +143,7 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 
 	existing, exists := s.GetWithDeleted(cert.Domain)
 	if exists {
+		cert.ID = existing.ID
 		if cert.CreatedAt == 0 {
 			cert.CreatedAt = existing.CreatedAt
 		}
@@ -171,17 +172,16 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 // All 获取所有未删除的证书
 func (s *StormCertStore) All() ([]*Certificate, error) {
 	var certs []Certificate
-	err := s.db.Find("Deleted", false, &certs)
-	if err != nil {
-		if err == storm.ErrNotFound {
-			return []*Certificate{}, nil
-		}
+	err := s.db.All(&certs)
+	if err != nil && err != storm.ErrNotFound {
 		return nil, fmt.Errorf("查询所有证书失败：%w", err)
 	}
 
-	result := make([]*Certificate, len(certs))
+	result := make([]*Certificate, 0, len(certs))
 	for i := range certs {
-		result[i] = &certs[i]
+		if !certs[i].Deleted {
+			result = append(result, &certs[i])
+		}
 	}
 	return result, nil
 }

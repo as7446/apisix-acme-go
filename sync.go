@@ -49,7 +49,9 @@ func (m *SyncManager) Sync() error {
 		if err := m.importAllFromAPISIX(apisixSSLs); err != nil {
 			return fmt.Errorf("首次导入失败：%w", err)
 		}
-		m.store.SetLastSyncTime(now, true)
+		if err := m.store.SetLastSyncTime(now, true); err != nil {
+			return fmt.Errorf("更新同步状态失败：%w", err)
+		}
 		Log.Printf("首次同步完成，已导入 %d 个证书", len(apisixSSLs))
 		return nil
 	}
@@ -73,7 +75,7 @@ func (m *SyncManager) Sync() error {
 	for domain, localCert := range localMap {
 		apisixSSL, exists := apisixSSLs[domain]
 		if !exists {
-			if !localCert.Deleted && localCert.UpdatedAt > lastSyncTime {
+			if !localCert.Deleted && localCert.NotAfter > now {
 				Log.Printf("检测到 APISIX 证书被误删，自动恢复：domain=%s", domain)
 				if err := m.restoreCertificate(domain, localCert); err != nil {
 					Log.Printf("恢复证书失败：domain=%s, error=%v", domain, err)
@@ -124,7 +126,9 @@ func (m *SyncManager) Sync() error {
 		}
 	}
 
-	m.store.SetLastSyncTime(now, true)
+	if err := m.store.SetLastSyncTime(now, true); err != nil {
+		return fmt.Errorf("更新同步状态失败：%w", err)
+	}
 	Log.Printf("证书同步完成：更新=%d, 恢复=%d, 导入=%d, 删除=%d", updatedCount, restoredCount, importedCount, deletedCount)
 	return nil
 }
