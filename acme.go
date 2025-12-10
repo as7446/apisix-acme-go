@@ -37,7 +37,7 @@ func (u *AcmeUser) GetPrivateKey() crypto.PrivateKey {
 
 type AcmeManager struct {
 	cfg        *Config
-	store      *FileCertStore
+	store      *StormCertStore
 	certCache  *CertCache
 	httpStore  *HTTPChallengeStore
 	apisix     *ApisixClient
@@ -45,7 +45,7 @@ type AcmeManager struct {
 	clientInit func(email string) (*lego.Client, error)
 }
 
-func NewAcmeManager(cfg *Config, store *FileCertStore, certCache *CertCache, httpStore *HTTPChallengeStore, apiClient *ApisixClient, logger Logger) (*AcmeManager, error) {
+func NewAcmeManager(cfg *Config, store *StormCertStore, certCache *CertCache, httpStore *HTTPChallengeStore, apiClient *ApisixClient, logger Logger) (*AcmeManager, error) {
 	m := &AcmeManager{
 		cfg:       cfg,
 		store:     store,
@@ -122,7 +122,7 @@ func (m *AcmeManager) CheckAPISIXCertificate(domain string) (exists bool, notAft
 }
 
 // RequestCertificate 申请或更新证书
-func (m *AcmeManager) RequestCertificate(domain string, email string, force bool) (*CertMeta, error) {
+func (m *AcmeManager) RequestCertificate(domain string, email string, force bool) (*Certificate, error) {
 	if email == "" {
 		email = m.cfg.DefaultEmail
 	}
@@ -141,21 +141,36 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
 			return nil, fmt.Errorf("缓存上传证书到 APISIX 失败：%w", err)
 		}
-		meta := &CertMeta{
-			Domain:    domain,
-			SNIs:      []string{domain},
-			NotBefore: cached.NotBefore,
-			NotAfter:  cached.NotAfter,
-			APISIXID:  strings.ReplaceAll(domain, "*.", "wildcard."),
+
+		// 计算 fingerprint 和 serial number
+		fingerprint, err := CalculateFingerprint(cached.CertPEM)
+		if err != nil {
+			m.logger.Printf("计算证书指纹失败：%v", err)
+			fingerprint = ""
+		}
+		serialNumber, err := CalculateSerialNumber(cached.CertPEM)
+		if err != nil {
+			m.logger.Printf("计算证书序列号失败：%v", err)
+			serialNumber = ""
+		}
+
+		cert := &Certificate{
+			Domain:       domain,
+			SNIs:         []string{domain},
+			NotBefore:    cached.NotBefore,
+			NotAfter:     cached.NotAfter,
+			APISIXID:     strings.ReplaceAll(domain, "*.", "wildcard."),
+			Fingerprint:  fingerprint,
+			SerialNumber: serialNumber,
 		}
 		if hasLocalMeta {
-			meta.CreatedAt = localMeta.CreatedAt
+			cert.CreatedAt = localMeta.CreatedAt
 		}
-		if err := m.store.Upsert(meta); err != nil {
+		if err := m.store.Upsert(cert); err != nil {
 			return nil, fmt.Errorf("保存证书元数据失败：%w", err)
 		}
 		m.logger.Printf("缓存证书覆盖 APISIX 完成：域名=%s", domain)
-		return meta, nil
+		return cert, nil
 	}
 
 	// 3. 判断是否需要申请新证书（仅依据本地元数据/force）
@@ -248,57 +263,109 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		return nil, fmt.Errorf("APISIX 上传证书失败：%w", err)
 	}
 
-	normalizedAPISIXID := strings.ReplaceAll(domain, "*.", "wildcard.")
-	meta := &CertMeta{
-		Domain:    domain,
-		SNIs:      []string{domain},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
-		APISIXID:  normalizedAPISIXID,
+	// 计算 fingerprint 和 serial number
+	fingerprint, err := CalculateFingerprint(certPEM)
+	if err != nil {
+		m.logger.Printf("计算证书指纹失败：%v", err)
+		fingerprint = ""
 	}
-	if err := m.store.Upsert(meta); err != nil {
+	serialNumber, err := CalculateSerialNumber(certPEM)
+	if err != nil {
+		m.logger.Printf("计算证书序列号失败：%v", err)
+		serialNumber = ""
+	}
+
+	normalizedAPISIXID := strings.ReplaceAll(domain, "*.", "wildcard.")
+	cert := &Certificate{
+		Domain:       domain,
+		SNIs:         []string{domain},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+		APISIXID:     normalizedAPISIXID,
+		Fingerprint:  fingerprint,
+		SerialNumber: serialNumber,
+	}
+	if hasLocalMeta {
+		cert.CreatedAt = localMeta.CreatedAt
+	}
+	if err := m.store.Upsert(cert); err != nil {
 		return nil, fmt.Errorf("保存证书元数据失败：%w", err)
 	}
-	m.logger.Printf("证书申请完成：域名=%s", domain)
-	return meta, nil
+	m.logger.Printf("证书申请完成：域名=%s, fingerprint=%s", domain, fingerprint)
+	return cert, nil
 }
 
 // NeedRenew 判断证书是否需要续期
-func (m *AcmeManager) NeedRenew(meta *CertMeta) bool {
+func (m *AcmeManager) NeedRenew(cert *Certificate) bool {
 	now := time.Now().Unix()
 	renewThreshold := int64(m.cfg.RenewBeforeDays * 24 * int(time.Hour/time.Second))
-	return meta.NotAfter-now <= renewThreshold
+	return cert.NotAfter-now <= renewThreshold
 }
 
 func (m *AcmeManager) RenewAll() {
-	list := m.store.All()
+	list, err := m.store.FindNeedRenew(m.cfg.RenewBeforeDays)
+	if err != nil {
+		m.logger.Printf("查询需要续期的证书失败：%v", err)
+		return
+	}
+
 	now := time.Now().Unix()
 
-	for _, meta := range list {
+	for _, cert := range list {
+		// 尝试锁定续期
+		locked, err := m.store.LockRenew(cert.Domain)
+		if err != nil {
+			m.logger.Printf("锁定续期失败：域名=%s, 错误=%v", cert.Domain, err)
+			continue
+		}
+		if !locked {
+			m.logger.Printf("证书续期已被锁定，跳过：域名=%s", cert.Domain)
+			continue
+		}
+
+		// 确保解锁
+		defer func(domain string) {
+			if err := m.store.UnlockRenew(domain); err != nil {
+				m.logger.Printf("解锁续期失败：域名=%s, 错误=%v", domain, err)
+			}
+		}(cert.Domain)
+
 		// 1. 如果有有效缓存，直接覆盖 APISIX
-		if cached, ok := m.certCache.Get(meta.Domain); ok && cached.NotAfter > now {
-			m.logger.Printf("续期任务：使用缓存证书覆盖 APISIX：域名=%s", meta.Domain)
-			if err := m.apisix.UpsertCertificate(meta.Domain, []string{meta.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
-				m.logger.Printf("续期上传缓存证书到 APISIX 失败：域名=%s, 错误=%v", meta.Domain, err)
+		if cached, ok := m.certCache.Get(cert.Domain); ok && cached.NotAfter > now {
+			m.logger.Printf("续期任务：使用缓存证书覆盖 APISIX：域名=%s", cert.Domain)
+			if err := m.apisix.UpsertCertificate(cert.Domain, []string{cert.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
+				m.logger.Printf("续期上传缓存证书到 APISIX 失败：域名=%s, 错误=%v", cert.Domain, err)
 			} else {
-				meta.NotBefore = cached.NotBefore
-				meta.NotAfter = cached.NotAfter
-				meta.UpdatedAt = now
-				if err := m.store.Upsert(meta); err != nil {
-					m.logger.Printf("续期更新元数据失败：域名=%s, 错误=%v", meta.Domain, err)
+				// 更新 fingerprint 和 serial number
+				fingerprint, _ := CalculateFingerprint(cached.CertPEM)
+				serialNumber, _ := CalculateSerialNumber(cached.CertPEM)
+				cert.NotBefore = cached.NotBefore
+				cert.NotAfter = cached.NotAfter
+				cert.Fingerprint = fingerprint
+				cert.SerialNumber = serialNumber
+				cert.LastRenewAt = now
+				if err := m.store.Upsert(cert); err != nil {
+					m.logger.Printf("续期更新元数据失败：域名=%s, 错误=%v", cert.Domain, err)
 				}
 				continue
 			}
 		}
 
 		// 2. 判断是否需要续期（仅用本地元数据）
-		needRenew := m.NeedRenew(meta)
+		needRenew := m.NeedRenew(cert)
 
 		// 3. 如果需要续期，执行续期操作
 		if needRenew {
-			m.logger.Printf("开始续期证书：域名=%s", meta.Domain)
-			if _, err := m.RequestCertificate(meta.Domain, "", false); err != nil {
-				m.logger.Printf("续期证书失败：域名=%s, 错误=%v（证书可能已缓存，可手动重试）", meta.Domain, err)
+			m.logger.Printf("开始续期证书：域名=%s", cert.Domain)
+			newCert, err := m.RequestCertificate(cert.Domain, "", false)
+			if err != nil {
+				m.logger.Printf("续期证书失败：域名=%s, 错误=%v（证书可能已缓存，可手动重试）", cert.Domain, err)
+			} else {
+				// 更新续期时间
+				newCert.LastRenewAt = now
+				if err := m.store.Upsert(newCert); err != nil {
+					m.logger.Printf("更新续期时间失败：域名=%s, 错误=%v", cert.Domain, err)
+				}
 			}
 		}
 	}

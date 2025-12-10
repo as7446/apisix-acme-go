@@ -8,12 +8,9 @@ import (
 )
 
 // StartRenewCron 启动定时任务，定期扫描并续期证书
-func StartRenewCron(cfg *Config, store *FileCertStore, acme *AcmeManager, logger *log.Logger) error {
+func StartRenewCron(cfg *Config, store *StormCertStore, acme *AcmeManager, logger *log.Logger) error {
 	if cfg.RenewCron == "" {
 		return nil
-	}
-	if err := store.Load(); err != nil {
-		logger.Printf("加载证书元数据失败：%v", err)
 	}
 
 	c := cron.New(cron.WithSeconds())

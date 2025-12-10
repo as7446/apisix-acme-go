@@ -22,11 +22,12 @@ func main() {
 	// APISIX 客户端
 	apiClient := NewApisixClient(cfg, logger)
 
-	// 证书元数据存储
-	store := NewFileCertStore(cfg, logger)
-	if err := store.Load(); err != nil {
-		logger.Printf("加载证书元数据失败：%v", err)
+	// 证书元数据存储（使用 Storm）
+	store, err := NewStormCertStore(cfg, logger)
+	if err != nil {
+		logger.Fatalf("初始化证书元数据存储失败：%v", err)
 	}
+	defer store.Close()
 
 	// 证书缓存
 	certCache := NewCertCache(cfg, logger)
@@ -77,6 +78,11 @@ func main() {
 
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Printf("服务关闭错误：%v", err)
+	}
+
+	// 关闭数据库连接
+	if err := store.Close(); err != nil {
+		logger.Printf("关闭数据库连接失败：%v", err)
 	}
 
 	logger.Println("服务已停止")

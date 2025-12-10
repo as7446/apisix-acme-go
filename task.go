@@ -26,7 +26,7 @@ type Task struct {
 
 // TaskManager 任务管理器（内存存储）
 type TaskManager struct {
-	store *FileCertStore
+	store *StormCertStore
 	acme  *AcmeManager
 	log   Logger
 
@@ -37,7 +37,7 @@ type TaskManager struct {
 }
 
 // NewTaskManager 创建任务管理器
-func NewTaskManager(store *FileCertStore, acme *AcmeManager, logger Logger) *TaskManager {
+func NewTaskManager(store *StormCertStore, acme *AcmeManager, logger Logger) *TaskManager {
 	return &TaskManager{
 		store:      store,
 		acme:       acme,
