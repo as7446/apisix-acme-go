@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -171,13 +172,19 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
 			return
 		}
-		if _, ok := store.GetWithDeleted(domain); !ok {
+		rec, ok := store.GetWithDeleted(domain)
+		if !ok {
 			c.JSON(404, APIResponse{Code: 404, Message: "未找到证书"})
+			return
+		}
+		if rec.Deleted {
+			c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
 			return
 		}
 		_ = cache.Remove(domain)
 		if err := api.DeleteCertificate(domain); err != nil {
-			Log.Printf("删除 APISIX 证书失败：%v", err)
+			c.JSON(500, APIResponse{Code: 500, Message: fmt.Sprintf("删除 APISIX 证书失败: %v", err)})
+			return
 		}
 		if err := store.MarkDeleted(domain); err != nil {
 			c.JSON(500, APIResponse{Code: 500, Message: "标记删除失败"})

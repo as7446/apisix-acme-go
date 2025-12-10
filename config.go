@@ -53,8 +53,23 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.StorageDir == "" {
 		cfg.StorageDir = "out"
 	}
+	if cfg.RenewBeforeDays <= 0 {
+		cfg.RenewBeforeDays = 30
+	}
+	if cfg.TaskRetentionHrs <= 0 {
+		cfg.TaskRetentionHrs = 24 * 7
+	}
 	if cfg.RenewCron == "" {
-		cfg.RenewCron = "0 0 3 * * *"
+		cfg.RenewCron = "0 0 2 * * *"
+	}
+	if cfg.TaskCleanupCron == "" {
+		cfg.TaskCleanupCron = "0 0 1 * * *"
+	}
+	if cfg.SyncCron == "" {
+		cfg.SyncCron = "0 0 * * * *"
+	}
+	if cfg.SyncMode == "" {
+		cfg.SyncMode = "compat"
 	}
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
