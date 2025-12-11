@@ -181,7 +181,7 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
 			return
 		}
-		_ = cache.Remove(domain)
+		//_ = cache.Remove(domain)
 		if err := api.DeleteCertificate(domain); err != nil {
 			c.JSON(500, APIResponse{Code: 500, Message: fmt.Sprintf("删除 APISIX 证书失败: %v", err)})
 			return
