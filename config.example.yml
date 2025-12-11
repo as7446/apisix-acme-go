@@ -16,6 +16,20 @@ renew_cron: "0 0 3 * * *"
 # 证书到期前多少天开始续期（默认 30 天）
 renew_before_days: 30
 
+# 任务状态保留时间（小时）
+task_retention_hours: 168
+
+# 任务清理定时任务
+task_cleanup_cron: "0 0 * * * *"
+
+# 同步定时任务
+sync_cron: "*/30 * * * * *"
+
+# 同步模式：strict 或 compat
+# strict: APISIX 有但本地无的证书会被清理, 需要手动删除
+# compat: APISIX 有但本地无的证书会被导入到本地（默认）
+sync_mode: "compat"
+
 # ACME 配置，可选
 acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
 

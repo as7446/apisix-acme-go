@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -41,7 +41,7 @@ func checkBearer(r *http.Request, token string) bool {
 	return strings.TrimSpace(auth[len(prefix):]) == token
 }
 
-func NewRouter(cfg *Config, tm *TaskManager, httpStore *HTTPChallengeStore, logger *log.Logger) *gin.Engine {
+func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixClient, cache *CertCache, httpStore *HTTPChallengeStore) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
@@ -53,17 +53,17 @@ func NewRouter(cfg *Config, tm *TaskManager, httpStore *HTTPChallengeStore, logg
 			return
 		}
 		if keyAuth, ok := httpStore.Get(token); ok {
-			logger.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
+			Log.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
 			c.String(200, keyAuth)
 			return
 		}
-		logger.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 未命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
+		Log.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 未命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
 		c.String(404, "token not found")
 	})
 
-	api := r.Group("/apisix_acme")
+	apiGroup := r.Group("/apisix_acme")
 
-	api.POST("/task_create", func(c *gin.Context) {
+	apiGroup.POST("/task_create", func(c *gin.Context) {
 		if !checkBearer(c.Request, cfg.BearerToken) {
 			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
 			return
@@ -96,7 +96,7 @@ func NewRouter(cfg *Config, tm *TaskManager, httpStore *HTTPChallengeStore, logg
 		})
 	})
 
-	api.GET("/task_status", func(c *gin.Context) {
+	apiGroup.GET("/task_status", func(c *gin.Context) {
 		if !checkBearer(c.Request, cfg.BearerToken) {
 			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
 			return
@@ -130,6 +130,69 @@ func NewRouter(cfg *Config, tm *TaskManager, httpStore *HTTPChallengeStore, logg
 			Code: 200,
 			Data: resp,
 		})
+	})
+
+	apiGroup.GET("/cert_info", func(c *gin.Context) {
+		if !checkBearer(c.Request, cfg.BearerToken) {
+			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
+			return
+		}
+		domain := c.Query("domain")
+		if domain == "" {
+			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
+			return
+		}
+		cert, ok := store.GetWithDeleted(domain)
+		if !ok {
+			c.JSON(404, APIResponse{Code: 404, Message: "未找到证书"})
+			return
+		}
+		resp := map[string]interface{}{
+			"domain":        cert.Domain,
+			"snis":          cert.SNIs,
+			"not_before":    cert.NotBefore,
+			"not_after":     cert.NotAfter,
+			"apisix_id":     cert.APISIXID,
+			"fingerprint":   cert.Fingerprint,
+			"serial_number": cert.SerialNumber,
+			"deleted":       cert.Deleted,
+			"created_at":    cert.CreatedAt,
+			"updated_at":    cert.UpdatedAt,
+		}
+		c.JSON(200, APIResponse{Code: 200, Data: resp})
+	})
+
+	apiGroup.DELETE("/cert_delete", func(c *gin.Context) {
+		if !checkBearer(c.Request, cfg.BearerToken) {
+			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
+			return
+		}
+		domain := c.Query("domain")
+		if domain == "" {
+			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
+			return
+		}
+		rec, ok := store.GetWithDeleted(domain)
+		if !ok {
+			c.JSON(404, APIResponse{Code: 404, Message: "未找到证书"})
+			return
+		}
+		if rec.Deleted {
+			c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
+			return
+		}
+		_ = cache.Remove(domain)
+		if err := api.DeleteCertificate(domain); err != nil {
+			c.JSON(500, APIResponse{Code: 500, Message: fmt.Sprintf("删除 APISIX 证书失败: %v", err)})
+			return
+		}
+		if err := store.MarkDeleted(domain); err != nil {
+			c.JSON(500, APIResponse{Code: 500, Message: "标记删除失败"})
+			return
+		}
+		_ = store.SaveTask(domain, string(TaskStatusSuccess), "deleted")
+		_ = store.CleanupTasks(cfg.TaskRetentionHrs)
+		c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
 	})
 
 	r.GET("/apisix_acme/tool.html", func(c *gin.Context) {

@@ -252,6 +252,6 @@ MIT License
 
 ## 参考
 
-- 原项目：[TMaize/apisix-acme](https://github.com/TMaize/apisix-acme)
+- 项目：[TMaize/apisix-acme](https://github.com/TMaize/apisix-acme)
 - lego 文档：[go-acme.github.io/lego](https://go-acme.github.io/lego/)
 - APISIX 文档：[apisix.apache.org](https://apisix.apache.org/)

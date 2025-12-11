@@ -14,7 +14,12 @@ type Config struct {
 	DefaultEmail     string `yaml:"default_email"`
 	StorageDir       string `yaml:"storage_dir"`
 	RenewCron        string `yaml:"renew_cron"`
-	RenewBeforeDays  int    `yaml:"renew_before_days"` // 证书到期前多少天开始续期
+	RenewBeforeDays  int    `yaml:"renew_before_days"`
+	SyncCron         string `yaml:"sync_cron"`
+	SyncMode         string `yaml:"sync_mode"`
+	TaskCleanupCron  string `yaml:"task_cleanup_cron"`
+	TaskRetentionHrs int    `yaml:"task_retention_hours"`
+
 	// ACME 配置
 	AcmeDirectoryURL string            `yaml:"acme_directory_url"`
 	AcmeDNSProvider  string            `yaml:"acme_dns_provider"`
@@ -48,11 +53,23 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.StorageDir == "" {
 		cfg.StorageDir = "out"
 	}
-	if cfg.RenewCron == "" {
-		cfg.RenewCron = "0 0 3 * * *"
-	}
 	if cfg.RenewBeforeDays <= 0 {
-		cfg.RenewBeforeDays = 30 // 默认提前 30 天续期
+		cfg.RenewBeforeDays = 30
+	}
+	if cfg.TaskRetentionHrs <= 0 {
+		cfg.TaskRetentionHrs = 24 * 7
+	}
+	if cfg.RenewCron == "" {
+		cfg.RenewCron = "0 0 2 * * *"
+	}
+	if cfg.TaskCleanupCron == "" {
+		cfg.TaskCleanupCron = "0 0 1 * * *"
+	}
+	if cfg.SyncCron == "" {
+		cfg.SyncCron = "0 0 * * * *"
+	}
+	if cfg.SyncMode == "" {
+		cfg.SyncMode = "compat"
 	}
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
