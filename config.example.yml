@@ -44,7 +44,7 @@ acme_dns_env: {}
 # 自动在 APISIX 中创建/更新 HTTP-01 路由
 challenge_route:
   enable: true
-  route_id: "apisix_acme_http01"
+  route_name: "apisix_acme_http01"
   hosts: []  # 可选，限定 Host
   upstream_nodes:
     - "127.0.0.1:8080"

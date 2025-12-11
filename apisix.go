@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type ApisixClient struct {
@@ -216,9 +218,9 @@ type ApisixUpstream struct {
 }
 
 // EnsureChallengeRoute 创建或更新验证路由
-func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) error {
+func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) (string, error) {
 	if !cfg.ChallengeRoute.Enable {
-		return nil
+		return "", nil
 	}
 	nodes := make(map[string]int)
 	if len(cfg.ChallengeRoute.UpstreamNodes) == 0 {
@@ -238,12 +240,13 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) error {
 		}
 	}
 	if len(nodes) == 0 {
-		return fmt.Errorf("验证路由节点为空")
+		return "", fmt.Errorf("验证路由节点为空")
 	}
 
+	routeID := uuid.New().String()
 	route := ApisixRoute{
-		ID:       cfg.ChallengeRoute.RouteID,
-		Name:     "apisix_acme_http01",
+		ID:       routeID,
+		Name:     cfg.ChallengeRoute.RouteName,
 		URI:      "/.well-known/acme-challenge/*",
 		Methods:  []string{"GET"},
 		Hosts:    cfg.ChallengeRoute.Hosts,
@@ -257,12 +260,12 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) error {
 	}
 	body, err := json.Marshal(route)
 	if err != nil {
-		return fmt.Errorf("序列化路由对象失败：%w", err)
+		return "", fmt.Errorf("序列化路由对象失败：%w", err)
 	}
-	url := c.resourceURL("routes", cfg.ChallengeRoute.RouteID)
+	url := c.resourceURL("routes", routeID)
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("创建请求失败：%w", err)
+		return "", fmt.Errorf("创建请求失败：%w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
@@ -271,22 +274,22 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) error {
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("请求 APISIX 失败：%w", err)
+		return "", fmt.Errorf("请求 APISIX 失败：%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("APISIX 创建验证路由失败，状态码=%d", resp.StatusCode)
+		return "", fmt.Errorf("APISIX 创建验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Printf("验证路由已创建：ID=%s", cfg.ChallengeRoute.RouteID)
-	return nil
+	Log.Printf("验证路由已创建：ID=%s", routeID)
+	return routeID, nil
 }
 
 // DeleteChallengeRoute 删除验证路由
-func (c *ApisixClient) DeleteChallengeRoute(cfg *Config) error {
-	if !cfg.ChallengeRoute.Enable {
+func (c *ApisixClient) DeleteChallengeRoute(routeID string) error {
+	if routeID == "" {
 		return nil
 	}
-	url := c.resourceURL("routes", cfg.ChallengeRoute.RouteID)
+	url := c.resourceURL("routes", routeID)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		return fmt.Errorf("创建请求失败：%w", err)
@@ -302,7 +305,7 @@ func (c *ApisixClient) DeleteChallengeRoute(cfg *Config) error {
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("APISIX 删除验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Printf("验证路由已删除：ID=%s", cfg.ChallengeRoute.RouteID)
+	Log.Printf("验证路由已删除：ID=%s", routeID)
 	return nil
 }
 

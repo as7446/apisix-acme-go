@@ -190,13 +190,16 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		notBefore = cached.NotBefore
 		notAfter = cached.NotAfter
 	} else {
+		var routeID string
 		routeCleanup := func() {}
 		if m.cfg.ChallengeRoute.Enable {
-			if err := m.apisix.EnsureChallengeRoute(m.cfg); err != nil {
+			var err error
+			routeID, err = m.apisix.EnsureChallengeRoute(m.cfg)
+			if err != nil {
 				return nil, fmt.Errorf("创建验证路由失败：%w", err)
 			}
 			routeCleanup = func() {
-				if err := m.apisix.DeleteChallengeRoute(m.cfg); err != nil {
+				if err := m.apisix.DeleteChallengeRoute(routeID); err != nil {
 					Log.Printf("删除验证路由失败：%v", err)
 				}
 			}
@@ -292,13 +295,6 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	return cert, nil
 }
 
-// NeedRenew 判断是否需要续期
-func (m *AcmeManager) NeedRenew(cert *Certificate) bool {
-	now := time.Now().Unix()
-	renewThreshold := int64(m.cfg.RenewBeforeDays * 24 * int(time.Hour/time.Second))
-	return cert.NotAfter-now <= renewThreshold
-}
-
 func (m *AcmeManager) RenewAll() {
 	list, err := m.store.FindNeedRenew(m.cfg.RenewBeforeDays)
 	if err != nil {
@@ -327,36 +323,42 @@ func (m *AcmeManager) RenewAll() {
 			}
 		}(cert.Domain)
 
-		// 1. 如果有有效缓存，直接覆盖 APISIX
-		if cached, ok := m.certCache.Get(cert.Domain); ok && cached.NotAfter > now {
-			Log.Printf("续期任务：使用缓存证书覆盖 APISIX：域名=%s", cert.Domain)
-			if err := m.apisix.UpsertCertificate(cert.Domain, []string{cert.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
-				Log.Printf("续期上传缓存证书到 APISIX 失败：域名=%s, 错误=%v", cert.Domain, err)
+		renewThreshold := now + int64(m.cfg.RenewBeforeDays*24*int(time.Hour/time.Second))
+		// 1. 检查缓存
+		cached, hasCache := m.certCache.Get(cert.Domain)
+		if hasCache && cached.NotAfter > now {
+			// 如果缓存证书在续期阈值内，需要续期
+			if cached.NotAfter <= renewThreshold {
+				Log.Printf("续期任务：缓存证书即将到期（%d天后），执行续期：域名=%s", m.cfg.RenewBeforeDays, cert.Domain)
 			} else {
-				// 更新 fingerprint 和 serial number
-				fingerprint, _ := CalculateFingerprint(cached.CertPEM)
-				serialNumber, _ := CalculateSerialNumber(cached.CertPEM)
-				cert.NotBefore = cached.NotBefore
-				cert.NotAfter = cached.NotAfter
-				cert.Fingerprint = fingerprint
-				cert.SerialNumber = serialNumber
-				cert.LastRenewAt = now
-				if err := m.store.Upsert(cert); err != nil {
-					Log.Printf("续期更新元数据失败：域名=%s, 错误=%v", cert.Domain, err)
+				if err := m.apisix.UpsertCertificate(cert.Domain, []string{cert.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
+					Log.Printf("续期上传缓存证书到 APISIX 失败：域名=%s, 错误=%v", cert.Domain, err)
+				} else {
+					// 更新 fingerprint 和 serial number
+					fingerprint, _ := CalculateFingerprint(cached.CertPEM)
+					serialNumber, _ := CalculateSerialNumber(cached.CertPEM)
+					cert.NotBefore = cached.NotBefore
+					cert.NotAfter = cached.NotAfter
+					cert.Fingerprint = fingerprint
+					cert.SerialNumber = serialNumber
+					cert.LastRenewAt = now
+					if err := m.store.Upsert(cert); err != nil {
+						Log.Printf("续期更新元数据失败：域名=%s, 错误=%v", cert.Domain, err)
+					}
+					continue
 				}
-				continue
 			}
 		}
 
-		// 2. 判断是否需要续期（仅用本地元数据）
-		needRenew := m.NeedRenew(cert)
+		// 2. 判断是否需要续期
+		needRenew := cert.NotAfter <= renewThreshold
 
 		// 3. 如果需要续期，执行续期操作
 		if needRenew {
 			Log.Printf("开始续期证书：域名=%s", cert.Domain)
 			newCert, err := m.RequestCertificate(cert.Domain, "", false)
 			if err != nil {
-				Log.Printf("续期证书失败：域名=%s, 错误=%v（证书可能已缓存，可手动重试）", cert.Domain, err)
+				Log.Printf("续期证书失败：域名=%s, 错误=%v", cert.Domain, err)
 			} else {
 				// 更新续期时间
 				newCert.LastRenewAt = now
