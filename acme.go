@@ -88,7 +88,10 @@ func (m *AcmeManager) defaultClientInit(email string) (*lego.Client, error) {
 		return nil, fmt.Errorf("设置 HTTP-01 Provider 失败：%w", err)
 	}
 
-	_, _ = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	_, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	if err != nil {
+		return nil, fmt.Errorf("用户注册失败：%w", err)
+	}
 
 	return client, nil
 }
@@ -133,7 +136,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	cached, hasCache := m.certCache.Get(domain)
 
 	// 2. 如果有有效缓存，直接覆盖 APISIX
-	if hasCache && cached.NotAfter > now {
+	if hasCache && cached.NotAfter > now && !force {
 		Log.Printf("缓存证书覆盖 APISIX：域名=%s, 过期时间=%s", domain, time.Unix(cached.NotAfter, 0).Format("2006-01-02 15:04:05"))
 		if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
 			return nil, fmt.Errorf("缓存上传证书到 APISIX 失败：%w", err)
@@ -194,7 +197,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		routeCleanup := func() {}
 		if m.cfg.ChallengeRoute.Enable {
 			var err error
-			routeID, err = m.apisix.EnsureChallengeRoute(m.cfg)
+			routeID, err = m.apisix.EnsureChallengeRoute(m.cfg, domain)
 			if err != nil {
 				return nil, fmt.Errorf("创建验证路由失败：%w", err)
 			}
