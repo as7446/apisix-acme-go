@@ -42,10 +42,8 @@ func (m *SyncManager) Sync() error {
 	if err != nil {
 		return fmt.Errorf("获取 APISIX 证书列表失败：%w", err)
 	}
-	Log.Printf("从 APISIX 获取到 %d 个证书", len(apisixSSLs))
 
 	if !firstSyncDone {
-		Log.Printf("首次同步，导入所有 APISIX 证书")
 		if err := m.importAllFromAPISIX(apisixSSLs); err != nil {
 			return fmt.Errorf("首次导入失败：%w", err)
 		}
@@ -60,7 +58,6 @@ func (m *SyncManager) Sync() error {
 	if err != nil {
 		return fmt.Errorf("获取本地证书列表失败：%w", err)
 	}
-	Log.Printf("本地数据库有 %d 个证书", len(localCerts))
 
 	localMap := make(map[string]*Certificate)
 	for _, cert := range localCerts {
@@ -106,18 +103,20 @@ func (m *SyncManager) Sync() error {
 
 	for domain, apisixSSL := range apisixSSLs {
 		if _, exists := localMap[domain]; exists {
-			continue
+			if _, ok := m.certCache.Get(domain); ok {
+				continue
+			}
 		}
 
 		if SyncMode(m.cfg.SyncMode) == SyncModeStrict {
-			Log.Printf("严格模式：删除 APISIX 证书：domain=%s", domain)
+			//Log.Printf("严格模式：删除 APISIX 证书：domain=%s", domain)
 			if err := m.apisix.DeleteCertificate(domain); err != nil {
 				Log.Printf("删除 APISIX 证书失败：domain=%s, error=%v", domain, err)
 				continue
 			}
 			deletedCount++
 		} else {
-			Log.Printf("兼容模式：导入证书到本地：domain=%s", domain)
+			//Log.Printf("兼容模式：导入证书到本地：domain=%s", domain)
 			if err := m.importCertificate(domain, apisixSSL); err != nil {
 				Log.Printf("导入证书失败：domain=%s, error=%v", domain, err)
 				continue
@@ -129,7 +128,7 @@ func (m *SyncManager) Sync() error {
 	if err := m.store.SetLastSyncTime(now, true); err != nil {
 		return fmt.Errorf("更新同步状态失败：%w", err)
 	}
-	Log.Printf("证书同步完成：更新=%d, 恢复=%d, 导入=%d, 删除=%d", updatedCount, restoredCount, importedCount, deletedCount)
+	Log.Printf("证书同步完成：apisix=%d, dbcache=%d, 更新=%d, 恢复=%d, 导入=%d, 删除=%d", len(apisixSSLs), len(localCerts), updatedCount, restoredCount, importedCount, deletedCount)
 	return nil
 }
 
