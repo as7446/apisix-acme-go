@@ -30,7 +30,7 @@ type Config struct {
 
 type ChallengeRouteConfig struct {
 	Enable         bool     `yaml:"enable"`
-	RouteID        string   `yaml:"route_id"`
+	RouteName      string   `yaml:"route_name"`
 	Hosts          []string `yaml:"hosts"`
 	UpstreamNodes  []string `yaml:"upstream_nodes"`
 	UpstreamScheme string   `yaml:"upstream_scheme"`
@@ -74,8 +74,8 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
 	}
-	if cfg.ChallengeRoute.RouteID == "" {
-		cfg.ChallengeRoute.RouteID = "apisix_acme_http01"
+	if cfg.ChallengeRoute.RouteName == "" {
+		cfg.ChallengeRoute.RouteName = "apisix_acme_http01"
 	}
 	if cfg.ChallengeRoute.UpstreamScheme == "" {
 		cfg.ChallengeRoute.UpstreamScheme = "http"
