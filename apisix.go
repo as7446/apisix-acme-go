@@ -218,7 +218,7 @@ type ApisixUpstream struct {
 }
 
 // EnsureChallengeRoute 创建或更新验证路由
-func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) (string, error) {
+func (c *ApisixClient) EnsureChallengeRoute(cfg *Config, domain string) (string, error) {
 	if !cfg.ChallengeRoute.Enable {
 		return "", nil
 	}
@@ -249,7 +249,7 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config) (string, error) {
 		Name:     cfg.ChallengeRoute.RouteName,
 		URI:      "/.well-known/acme-challenge/*",
 		Methods:  []string{"GET"},
-		Hosts:    cfg.ChallengeRoute.Hosts,
+		Hosts:    []string{domain},
 		Priority: cfg.ChallengeRoute.Priority,
 		Status:   1,
 		Upstream: ApisixUpstream{

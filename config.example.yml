@@ -20,10 +20,10 @@ renew_before_days: 30
 task_retention_hours: 168
 
 # 任务清理定时任务
-task_cleanup_cron: "0 0 * * * *"
+task_cleanup_cron: "0 0 1 * * *"
 
 # 同步定时任务
-sync_cron: "*/30 * * * * *"
+sync_cron: "0 0 * * * *"
 
 # 同步模式：strict 或 compat
 # strict: APISIX 有但本地无的证书会被清理, 需要手动删除
@@ -45,7 +45,6 @@ acme_dns_env: {}
 challenge_route:
   enable: true
   route_name: "apisix_acme_http01"
-  hosts: []  # 可选，限定 Host
   upstream_nodes:
     - "127.0.0.1:8080"
   upstream_scheme: "http"

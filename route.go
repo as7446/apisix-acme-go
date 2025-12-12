@@ -159,7 +159,7 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			"created_at":    cert.CreatedAt,
 			"updated_at":    cert.UpdatedAt,
 		}
-		c.JSON(200, APIResponse{Code: 200, Data: resp})
+		c.JSON(200, APIResponse{Code: 200, Data: resp, Message: "获取证书信息成功"})
 	})
 
 	apiGroup.DELETE("/cert_delete", func(c *gin.Context) {
