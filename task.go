@@ -46,7 +46,7 @@ func NewTaskManager(store *StormCertStore, acme *AcmeManager) *TaskManager {
 
 // CreateOrUpdateTask 创建或更新任务
 func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool) *Task {
-	Log.Printf("收到任务请求：domain=%s, email=%s, force=%v", domain, email, force)
+	Log.Info("收到任务请求", "domain", domain, "email", email, "force", force)
 	m.mu.Lock()
 
 	// 1. 检查是否已有任务正在运行
@@ -56,11 +56,11 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 		// 检查任务状态
 		if t, ok := m.tasks[domain]; ok && t.Status == TaskStatusRunning {
 			m.mu.Unlock()
-			Log.Printf("域名 %s 的任务正在运行中，返回运行状态", domain)
+			Log.Info("任务正在运行中，返回运行状态", "domain", domain)
 			return t
 		}
 		// 如果任务状态不是 running，清除运行标记
-		Log.Printf("域名 %s 的任务运行标记存在但状态非 running，清理标记后继续", domain)
+		Log.Info("任务运行标记存在但状态非 running，清理标记后继续", "domain", domain)
 		delete(m.runningSet, domain)
 	}
 	m.runningMu.Unlock()
@@ -79,7 +79,7 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 						t := &Task{Domain: domain, Status: TaskStatusSkip}
 						m.tasks[domain] = t
 						m.mu.Unlock()
-						Log.Printf("证书已存在且有效（本地和 APISIX），跳过操作：域名=%s", domain)
+						Log.Info("证书已存在且有效（本地和 APISIX），跳过操作", "domain", domain)
 						return t
 					}
 				}
@@ -90,7 +90,7 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 	// 3. 如果已有任务但状态不是 running，清除旧状态
 	if t, ok := m.tasks[domain]; ok {
 		if t.Status == TaskStatusError {
-			Log.Printf("域名 %s 的上次任务失败，将重新执行", domain)
+			Log.Info("上次任务失败，将重新执行", "domain", domain)
 		}
 	}
 
@@ -109,7 +109,7 @@ func (m *TaskManager) CreateOrUpdateTask(domain string, email string, force bool
 	m.runningMu.Unlock()
 
 	m.mu.Unlock()
-	Log.Printf("任务进入运行队列：domain=%s", domain)
+	Log.Info("任务进入运行队列", "domain", domain)
 
 	// 5. 异步执行任务
 	go m.runTask(domain, email, force)
@@ -124,32 +124,32 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 		m.runningMu.Lock()
 		delete(m.runningSet, domain)
 		m.runningMu.Unlock()
-		Log.Printf("任务运行标记已释放：domain=%s", domain)
+		Log.Info("任务运行标记已释放", "domain", domain)
 	}()
 
 	// 添加 panic 恢复，确保状态总是被更新
 	defer func() {
 		if r := recover(); r != nil {
-			Log.Printf("域名 %s 的证书申请任务发生 panic：%v", domain, r)
+			Log.Error("证书申请任务发生 panic", "domain", domain, "panic", r)
 			m.updateTaskStatus(domain, TaskStatusError, fmt.Sprintf("任务执行发生 panic: %v", r))
 		}
 	}()
 
-	Log.Printf("任务开始执行：domain=%s", domain)
+	Log.Info("任务开始执行", "domain", domain)
 	m.updateTaskStatus(domain, TaskStatusRunning, "")
 	meta, err := m.acme.RequestCertificate(domain, email, force)
 	if err != nil {
-		Log.Printf("域名 %s 的证书申请任务失败：%v", domain, err)
+		Log.Error("证书申请任务失败", "domain", domain, "error", err)
 		m.updateTaskStatus(domain, TaskStatusError, err.Error())
 		return
 	}
 	// 确保证书申请和上传都成功
 	if meta == nil {
-		Log.Printf("域名 %s 的证书申请任务失败：返回的元数据为空", domain)
+		Log.Error("证书申请任务失败：返回的元数据为空", "domain", domain)
 		m.updateTaskStatus(domain, TaskStatusError, "证书申请返回的元数据为空")
 		return
 	}
-	Log.Printf("域名 %s 的证书申请任务成功完成：not_after=%d", domain, meta.NotAfter)
+	Log.Info("证书申请任务成功完成", "domain", domain, "not_after", meta.NotAfter)
 	m.updateTaskStatus(domain, TaskStatusSuccess, "")
 }
 
@@ -175,7 +175,7 @@ func (m *TaskManager) updateTaskStatus(domain string, status TaskStatus, errMsg 
 	}
 	_ = m.store.SaveTask(domain, string(status), errMsg)
 	_ = m.store.CleanupTasks(m.acme.cfg.TaskRetentionHrs)
-	Log.Printf("任务状态更新：domain=%s, %s -> %s, err_prev=%s, err_now=%s", domain, prevStatus, status, prevErr, errMsg)
+	Log.Info("任务状态更新", "domain", domain, "prev_status", prevStatus, "status", status, "prev_err", prevErr, "err", errMsg)
 }
 
 // GetTask 获取任务状态

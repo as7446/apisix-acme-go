@@ -1,9 +1,12 @@
 package main
 
 import (
-	"log"
+	"log/slog"
 	"os"
 )
 
 // Log 为全局日志实例
-var Log = log.New(os.Stdout, "[apisix-acme-go] ", log.LstdFlags|log.Lshortfile)
+var Log = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	AddSource: true,
+	Level:     slog.LevelInfo,
+}))

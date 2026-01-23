@@ -81,7 +81,7 @@ func NewStormCertStore(cfg *Config) (*StormCertStore, error) {
 		path: dbPath,
 	}
 
-	Log.Printf("证书元数据存储初始化（Storm）：path=%s", dbPath)
+	Log.Info("证书元数据存储初始化（Storm）", "path", dbPath)
 
 	return store, nil
 }
@@ -122,7 +122,7 @@ func (s *StormCertStore) Get(domain string) (*Certificate, bool) {
 		if err == storm.ErrNotFound {
 			return nil, false
 		}
-		Log.Printf("查询证书元数据失败：domain=%s, error=%v", domain, err)
+		Log.Error("查询证书元数据失败", "domain", domain, "error", err)
 		return nil, false
 	}
 	if cert.Deleted {
@@ -139,7 +139,7 @@ func (s *StormCertStore) GetWithDeleted(domain string) (*Certificate, bool) {
 		if err == storm.ErrNotFound {
 			return nil, false
 		}
-		Log.Printf("查询证书元数据失败：domain=%s, error=%v", domain, err)
+		Log.Error("查询证书元数据失败", "domain", domain, "error", err)
 		return nil, false
 	}
 	return &cert, true
@@ -172,7 +172,7 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 		return fmt.Errorf("保存证书元数据失败：%w", err)
 	}
 
-	Log.Printf("证书元数据已保存：domain=%s, fingerprint=%s", cert.Domain, cert.Fingerprint)
+	Log.Info("证书元数据已保存", "domain", cert.Domain, "fingerprint", cert.Fingerprint)
 
 	return nil
 }
@@ -278,7 +278,7 @@ func (s *StormCertStore) LockRenew(domain string) (bool, error) {
 		return false, fmt.Errorf("锁定续期失败：%w", err)
 	}
 
-	Log.Printf("续期已锁定：domain=%s", domain)
+	Log.Info("续期已锁定", "domain", domain)
 
 	return true, nil
 }
@@ -297,7 +297,7 @@ func (s *StormCertStore) UnlockRenew(domain string) error {
 		return fmt.Errorf("解锁续期失败：%w", err)
 	}
 
-	Log.Printf("续期已解锁：domain=%s", domain)
+	Log.Info("续期已解锁", "domain", domain)
 	return nil
 }
 
@@ -316,7 +316,7 @@ func (s *StormCertStore) MarkDeleted(domain string) error {
 		return fmt.Errorf("标记删除失败：%w", err)
 	}
 
-	Log.Printf("证书已标记删除：domain=%s", domain)
+	Log.Info("证书已标记删除", "domain", domain)
 
 	return nil
 }
@@ -340,7 +340,7 @@ func (s *StormCertStore) RestoreDeleted(domain string) error {
 		return fmt.Errorf("恢复证书失败：%w", err)
 	}
 
-	Log.Printf("证书已恢复：domain=%s", domain)
+	Log.Info("证书已恢复", "domain", domain)
 
 	return nil
 }

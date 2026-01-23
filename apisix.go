@@ -23,7 +23,7 @@ func NewApisixClient(cfg *Config) *ApisixClient {
 		baseURL: strings.TrimRight(cfg.ApisixAdminURL, "/"),
 		token:   cfg.ApisixAdminToken,
 		client: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: time.Duration(cfg.HTTPTimeout) * time.Second,
 		},
 	}
 }
@@ -153,7 +153,7 @@ func (c *ApisixClient) DeleteCertificate(id string) error {
 		respBody.ReadFrom(resp.Body)
 		return fmt.Errorf("APISIX 删除证书失败，状态码=%d, 响应=%s", resp.StatusCode, respBody.String())
 	}
-	Log.Printf("APISIX 证书已删除：ID=%s (原始域名=%s)", normalizedID, id)
+	Log.Info("APISIX 证书已删除", "id", normalizedID, "original_domain", id)
 	return nil
 }
 
@@ -191,7 +191,7 @@ func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyP
 		respBody.ReadFrom(resp.Body)
 		return fmt.Errorf("APISIX 上传证书失败，状态码=%d, 响应=%s", resp.StatusCode, respBody.String())
 	}
-	Log.Printf("APISIX 证书上传成功：ID=%s (原始域名=%s), SNIs=%v", normalizedID, id, snis)
+	Log.Info("APISIX 证书上传成功", "id", normalizedID, "original_domain", id, "snis", snis)
 	return nil
 }
 
@@ -280,7 +280,7 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config, domain string) (string,
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("APISIX 创建验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Printf("验证路由已创建：ID=%s", routeID)
+	Log.Info("验证路由已创建", "id", routeID)
 	return routeID, nil
 }
 
@@ -305,7 +305,7 @@ func (c *ApisixClient) DeleteChallengeRoute(routeID string) error {
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("APISIX 删除验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Printf("验证路由已删除：ID=%s", routeID)
+	Log.Info("验证路由已删除", "id", routeID)
 	return nil
 }
 

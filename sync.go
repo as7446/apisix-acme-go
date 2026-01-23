@@ -50,7 +50,7 @@ func (m *SyncManager) Sync() error {
 		if err := m.store.SetLastSyncTime(now, true); err != nil {
 			return fmt.Errorf("更新同步状态失败：%w", err)
 		}
-		Log.Printf("首次同步完成，已导入 %d 个证书", len(apisixSSLs))
+		Log.Info("首次同步完成", "count", len(apisixSSLs))
 		return nil
 	}
 
@@ -73,9 +73,9 @@ func (m *SyncManager) Sync() error {
 		apisixSSL, exists := apisixSSLs[domain]
 		if !exists {
 			if !localCert.Deleted && localCert.NotAfter > now {
-				Log.Printf("检测到 APISIX 证书被误删，自动恢复：domain=%s", domain)
+				Log.Info("检测到 APISIX 证书被误删，自动恢复", "domain", domain)
 				if err := m.restoreCertificate(domain, localCert); err != nil {
-					Log.Printf("恢复证书失败：domain=%s, error=%v", domain, err)
+					Log.Error("恢复证书失败", "domain", domain, "error", err)
 					continue
 				}
 				restoredCount++
@@ -85,15 +85,15 @@ func (m *SyncManager) Sync() error {
 
 		apisixFingerprint, err := CalculateFingerprint(apisixSSL.Cert)
 		if err != nil {
-			Log.Printf("计算 APISIX 证书指纹失败：domain=%s, error=%v", domain, err)
+			Log.Error("计算 APISIX 证书指纹失败", "domain", domain, "error", err)
 			continue
 		}
 
 		if localCert.Fingerprint != "" && localCert.Fingerprint != apisixFingerprint {
 			if localCert.UpdatedAt > lastSyncTime {
-				Log.Printf("检测到证书不一致，更新到 APISIX：domain=%s", domain)
+				Log.Info("检测到证书不一致，更新到 APISIX", "domain", domain)
 				if err := m.updateToAPISIX(domain, localCert); err != nil {
-					Log.Printf("更新证书到 APISIX 失败：domain=%s, error=%v", domain, err)
+					Log.Error("更新证书到 APISIX 失败", "domain", domain, "error", err)
 					continue
 				}
 				updatedCount++
@@ -109,16 +109,16 @@ func (m *SyncManager) Sync() error {
 		}
 
 		if SyncMode(m.cfg.SyncMode) == SyncModeStrict {
-			//Log.Printf("严格模式：删除 APISIX 证书：domain=%s", domain)
+			//Log.Info("严格模式：删除 APISIX 证书", "domain", domain)
 			if err := m.apisix.DeleteCertificate(domain); err != nil {
-				Log.Printf("删除 APISIX 证书失败：domain=%s, error=%v", domain, err)
+				Log.Error("删除 APISIX 证书失败", "domain", domain, "error", err)
 				continue
 			}
 			deletedCount++
 		} else {
-			//Log.Printf("兼容模式：导入证书到本地：domain=%s", domain)
+			//Log.Info("兼容模式：导入证书到本地", "domain", domain)
 			if err := m.importCertificate(domain, apisixSSL); err != nil {
-				Log.Printf("导入证书失败：domain=%s, error=%v", domain, err)
+				Log.Error("导入证书失败", "domain", domain, "error", err)
 				continue
 			}
 			importedCount++
@@ -128,7 +128,7 @@ func (m *SyncManager) Sync() error {
 	if err := m.store.SetLastSyncTime(now, true); err != nil {
 		return fmt.Errorf("更新同步状态失败：%w", err)
 	}
-	Log.Printf("证书同步完成：apisix=%d, dbcache=%d, 更新=%d, 恢复=%d, 导入=%d, 删除=%d", len(apisixSSLs), len(localCerts), updatedCount, restoredCount, importedCount, deletedCount)
+	Log.Info("证书同步完成", "apisix", len(apisixSSLs), "dbcache", len(localCerts), "updated", updatedCount, "restored", restoredCount, "imported", importedCount, "deleted", deletedCount)
 	return nil
 }
 
@@ -136,7 +136,7 @@ func (m *SyncManager) Sync() error {
 func (m *SyncManager) importAllFromAPISIX(apisixSSLs map[string]*ApisixSSLObject) error {
 	for domain, apisixSSL := range apisixSSLs {
 		if err := m.importCertificate(domain, apisixSSL); err != nil {
-			Log.Printf("导入证书失败：domain=%s, error=%v", domain, err)
+			Log.Error("导入证书失败", "domain", domain, "error", err)
 			continue
 		}
 	}
@@ -176,7 +176,7 @@ func (m *SyncManager) importCertificate(domain string, apisixSSL *ApisixSSLObjec
 	}
 
 	if err := m.certCache.Put(domain, apisixSSL.Cert, apisixSSL.Key, cert.NotBefore.Unix(), cert.NotAfter.Unix()); err != nil {
-		Log.Printf("保存证书到缓存失败：domain=%s, error=%v", domain, err)
+		Log.Error("保存证书到缓存失败", "domain", domain, "error", err)
 	}
 
 	return nil
