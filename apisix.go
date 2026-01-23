@@ -30,7 +30,7 @@ func NewApisixClient(cfg *Config) *ApisixClient {
 
 type ApisixSSLObject struct {
 	ID   string   `json:"id,omitempty"`
-	SNIs []string `json:"snis"` // v3 使用 snis 而不是 sni
+	SNIs []string `json:"snis"`
 	Cert string   `json:"cert"`
 	Key  string   `json:"key"`
 }

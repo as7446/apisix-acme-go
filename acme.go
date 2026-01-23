@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -57,11 +58,49 @@ func NewAcmeManager(cfg *Config, store *StormCertStore, certCache *CertCache, ht
 }
 
 func (m *AcmeManager) defaultClientInit(email string) (*lego.Client, error) {
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, err
+	var privateKey crypto.PrivateKey
+	var reg *registration.Resource
+
+	// 1. 尝试从存储中加载账户
+	account, err := m.store.GetAccount(email)
+	if err == nil {
+		Log.Printf("加载已有 ACME 账户：email=%s", email)
+		// 解析私钥
+		block, _ := pem.Decode(account.PrivateKey)
+		if block == nil {
+			return nil, fmt.Errorf("解析账户私钥失败")
+		}
+		privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("解析账户私钥失败：%w", err)
+		}
+
+		// 解析注册信息
+		if len(account.Registration) > 0 {
+			reg = &registration.Resource{}
+			if err := json.Unmarshal(account.Registration, reg); err != nil {
+				Log.Printf("解析账户注册信息失败（将尝试重新注册）：%v", err)
+				reg = nil
+			}
+		}
 	}
-	user := &AcmeUser{Email: email, key: privateKey}
+
+	// 2. 如果没有已有账户或加载失败，创建新账户
+	if privateKey == nil {
+		Log.Printf("创建新 ACME 账户：email=%s", email)
+		key, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			return nil, err
+		}
+		privateKey = key
+	}
+
+	user := &AcmeUser{
+		Email:        email,
+		Registration: reg,
+		key:          privateKey,
+	}
+
 	config := lego.NewConfig(user)
 	config.CADirURL = m.cfg.AcmeDirectoryURL
 	client, err := lego.NewClient(config)
@@ -88,9 +127,33 @@ func (m *AcmeManager) defaultClientInit(email string) (*lego.Client, error) {
 		return nil, fmt.Errorf("设置 HTTP-01 Provider 失败：%w", err)
 	}
 
-	_, err = client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-	if err != nil {
-		return nil, fmt.Errorf("用户注册失败：%w", err)
+	// 3. 如果是新用户或注册信息丢失，执行注册并保存
+	if user.Registration == nil {
+		reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+		if err != nil {
+			return nil, fmt.Errorf("用户注册失败：%w", err)
+		}
+		user.Registration = reg
+
+		// 保存账户信息
+		keyBytes := x509.MarshalPKCS1PrivateKey(privateKey.(*rsa.PrivateKey))
+		keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyBytes})
+
+		regBytes, err := json.Marshal(reg)
+		if err != nil {
+			Log.Printf("序列化注册信息失败：%v", err)
+		} else {
+			newAccount := &AcmeAccount{
+				Email:        email,
+				PrivateKey:   keyPEM,
+				Registration: regBytes,
+			}
+			if err := m.store.SaveAccount(newAccount); err != nil {
+				Log.Printf("保存 ACME 账户信息失败：%v", err)
+			} else {
+				Log.Printf("ACME 账户信息已保存：email=%s", email)
+			}
+		}
 	}
 
 	return client, nil
@@ -278,7 +341,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		serialNumber = ""
 	}
 
-	normalizedAPISIXID := strings.ReplaceAll(domain, "*.", "wildcard.")
+	normalizedAPISIXID := normalizeAPISIXID(domain)
 	cert := &Certificate{
 		Domain:       domain,
 		SNIs:         []string{domain},

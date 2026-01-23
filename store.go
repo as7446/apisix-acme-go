@@ -49,6 +49,14 @@ type SyncState struct {
 	FirstSyncDone bool  `storm:"index"`
 }
 
+// AcmeAccount ACME 账户信息
+type AcmeAccount struct {
+	Email        string `storm:"id"`
+	PrivateKey   []byte
+	Registration []byte // JSON encoded registration resource
+	CreatedAt    int64  `storm:"index"`
+}
+
 // StormCertStore 证书存储
 type StormCertStore struct {
 	db   *storm.DB
@@ -366,4 +374,22 @@ func CalculateSerialNumber(certPEM string) (string, error) {
 	}
 
 	return cert.SerialNumber.String(), nil
+}
+
+// GetAccount 获取 ACME 账户
+func (s *StormCertStore) GetAccount(email string) (*AcmeAccount, error) {
+	var account AcmeAccount
+	err := s.db.One("Email", email, &account)
+	if err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
+// SaveAccount 保存 ACME 账户
+func (s *StormCertStore) SaveAccount(account *AcmeAccount) error {
+	if account.CreatedAt == 0 {
+		account.CreatedAt = time.Now().Unix()
+	}
+	return s.db.Save(account)
 }
