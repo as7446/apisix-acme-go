@@ -103,6 +103,8 @@ func (m *AcmeManager) defaultClientInit(email string) (*lego.Client, error) {
 
 	config := lego.NewConfig(user)
 	config.CADirURL = m.cfg.AcmeDirectoryURL
+	// 配置 HTTP 超时
+	config.HTTPClient.Timeout = time.Duration(m.cfg.HTTPTimeout) * time.Second
 	client, err := lego.NewClient(config)
 	if err != nil {
 		return nil, err
@@ -322,12 +324,6 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		Log.Info("证书申请成功", "domain", domain, "not_after", time.Unix(notAfter, 0).Format("2006-01-02 15:04:05"))
 	}
 
-	apisixID := domain
-	if err := m.apisix.UpsertCertificate(apisixID, []string{domain}, certPEM, keyPEM, notAfter); err != nil {
-		Log.Error("APISIX 上传证书失败", "domain", domain, "cert_path", m.certCache.GetCertPath(domain), "error", err)
-		return nil, fmt.Errorf("APISIX 上传证书失败：%w", err)
-	}
-
 	// 计算 fingerprint 和 serial number
 	fingerprint, err := CalculateFingerprint(certPEM)
 	if err != nil {
@@ -353,9 +349,19 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	if hasLocalMeta {
 		cert.CreatedAt = localMeta.CreatedAt
 	}
+	// 先保存到数据库，确保证书不会丢失
 	if err := m.store.Upsert(cert); err != nil {
 		return nil, fmt.Errorf("保存证书元数据失败：%w", err)
 	}
+	Log.Info("证书元数据已保存到数据库", "domain", domain, "fingerprint", fingerprint)
+
+	// 再上传到 APISIX（如果失败，证书已安全保存，sync 任务会重试）
+	apisixID := domain
+	if err := m.apisix.UpsertCertificate(apisixID, []string{domain}, certPEM, keyPEM, notAfter); err != nil {
+		Log.Error("APISIX 上传证书失败（证书已保存到数据库，sync 任务会重试）", "domain", domain, "cert_path", m.certCache.GetCertPath(domain), "error", err)
+		// 不返回错误，因为证书已经安全保存
+	}
+
 	Log.Info("证书申请完成", "domain", domain, "fingerprint", fingerprint)
 	return cert, nil
 }

@@ -27,7 +27,7 @@ type Certificate struct {
 	CreatedAt    int64    `storm:"index"`
 	UpdatedAt    int64    `storm:"index"`
 	LastRenewAt  int64    `storm:"index"`
-	RenewLock    int      `storm:"index"`
+	RenewLockAt  int64    `storm:"index"`
 	Deleted      bool     `storm:"index"`
 	DeletedAt    int64    `storm:"index"`
 }
@@ -244,6 +244,7 @@ func (s *StormCertStore) CleanupTasks(retentionHours int) error {
 func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, error) {
 	now := time.Now().Unix()
 	threshold := now + int64(renewBeforeDays*24*int(time.Hour/time.Second))
+	lockTimeout := int64(3600) // 锁超时时间 1 小时
 
 	var certs []Certificate
 	err := s.db.Find("Deleted", false, &certs)
@@ -253,8 +254,19 @@ func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, err
 
 	result := make([]*Certificate, 0)
 	for i := range certs {
-		if certs[i].NotAfter <= threshold && certs[i].RenewLock == 0 {
-			result = append(result, &certs[i])
+		// 如果证书需要续期
+		if certs[i].NotAfter <= threshold {
+			// 检查锁是否有效
+			isLocked := false
+			if certs[i].RenewLockAt > 0 {
+				if now-certs[i].RenewLockAt < lockTimeout {
+					isLocked = true
+				}
+			}
+
+			if !isLocked {
+				result = append(result, &certs[i])
+			}
 		}
 	}
 	return result, nil
@@ -267,12 +279,16 @@ func (s *StormCertStore) LockRenew(domain string) (bool, error) {
 		return false, fmt.Errorf("证书不存在：%s", domain)
 	}
 
-	if cert.RenewLock == 1 {
+	now := time.Now().Unix()
+	lockTimeout := int64(3600)
+
+	// 再次检查锁（防止并发竞争）
+	if cert.RenewLockAt > 0 && now-cert.RenewLockAt < lockTimeout {
 		return false, nil
 	}
 
-	cert.RenewLock = 1
-	cert.UpdatedAt = time.Now().Unix()
+	cert.RenewLockAt = now
+	cert.UpdatedAt = now
 	err := s.db.Save(cert)
 	if err != nil {
 		return false, fmt.Errorf("锁定续期失败：%w", err)
@@ -290,7 +306,7 @@ func (s *StormCertStore) UnlockRenew(domain string) error {
 		return fmt.Errorf("证书不存在：%s", domain)
 	}
 
-	cert.RenewLock = 0
+	cert.RenewLockAt = 0
 	cert.UpdatedAt = time.Now().Unix()
 	err := s.db.Save(cert)
 	if err != nil {
