@@ -111,7 +111,7 @@ func (c *CertCache) Put(domain, certPEM, keyPEM string, notBefore, notAfter int6
 		return err
 	}
 
-	Log.Printf("证书已缓存：域名=%s, 证书=%s, 私钥=%s", domain, certPath, keyPath)
+	Log.Info("证书已缓存", "domain", domain, "cert_path", certPath, "key_path", keyPath)
 	return nil
 }
 

@@ -49,6 +49,14 @@ type SyncState struct {
 	FirstSyncDone bool  `storm:"index"`
 }
 
+// AcmeAccount ACME 账户信息
+type AcmeAccount struct {
+	Email        string `storm:"id"`
+	PrivateKey   []byte
+	Registration []byte // JSON encoded registration resource
+	CreatedAt    int64  `storm:"index"`
+}
+
 // StormCertStore 证书存储
 type StormCertStore struct {
 	db   *storm.DB
@@ -73,7 +81,7 @@ func NewStormCertStore(cfg *Config) (*StormCertStore, error) {
 		path: dbPath,
 	}
 
-	Log.Printf("证书元数据存储初始化（Storm）：path=%s", dbPath)
+	Log.Info("证书元数据存储初始化（Storm）", "path", dbPath)
 
 	return store, nil
 }
@@ -114,7 +122,7 @@ func (s *StormCertStore) Get(domain string) (*Certificate, bool) {
 		if err == storm.ErrNotFound {
 			return nil, false
 		}
-		Log.Printf("查询证书元数据失败：domain=%s, error=%v", domain, err)
+		Log.Error("查询证书元数据失败", "domain", domain, "error", err)
 		return nil, false
 	}
 	if cert.Deleted {
@@ -131,7 +139,7 @@ func (s *StormCertStore) GetWithDeleted(domain string) (*Certificate, bool) {
 		if err == storm.ErrNotFound {
 			return nil, false
 		}
-		Log.Printf("查询证书元数据失败：domain=%s, error=%v", domain, err)
+		Log.Error("查询证书元数据失败", "domain", domain, "error", err)
 		return nil, false
 	}
 	return &cert, true
@@ -164,7 +172,7 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 		return fmt.Errorf("保存证书元数据失败：%w", err)
 	}
 
-	Log.Printf("证书元数据已保存：domain=%s, fingerprint=%s", cert.Domain, cert.Fingerprint)
+	Log.Info("证书元数据已保存", "domain", cert.Domain, "fingerprint", cert.Fingerprint)
 
 	return nil
 }
@@ -270,7 +278,7 @@ func (s *StormCertStore) LockRenew(domain string) (bool, error) {
 		return false, fmt.Errorf("锁定续期失败：%w", err)
 	}
 
-	Log.Printf("续期已锁定：domain=%s", domain)
+	Log.Info("续期已锁定", "domain", domain)
 
 	return true, nil
 }
@@ -289,7 +297,7 @@ func (s *StormCertStore) UnlockRenew(domain string) error {
 		return fmt.Errorf("解锁续期失败：%w", err)
 	}
 
-	Log.Printf("续期已解锁：domain=%s", domain)
+	Log.Info("续期已解锁", "domain", domain)
 	return nil
 }
 
@@ -308,7 +316,7 @@ func (s *StormCertStore) MarkDeleted(domain string) error {
 		return fmt.Errorf("标记删除失败：%w", err)
 	}
 
-	Log.Printf("证书已标记删除：domain=%s", domain)
+	Log.Info("证书已标记删除", "domain", domain)
 
 	return nil
 }
@@ -332,7 +340,7 @@ func (s *StormCertStore) RestoreDeleted(domain string) error {
 		return fmt.Errorf("恢复证书失败：%w", err)
 	}
 
-	Log.Printf("证书已恢复：domain=%s", domain)
+	Log.Info("证书已恢复", "domain", domain)
 
 	return nil
 }
@@ -366,4 +374,22 @@ func CalculateSerialNumber(certPEM string) (string, error) {
 	}
 
 	return cert.SerialNumber.String(), nil
+}
+
+// GetAccount 获取 ACME 账户
+func (s *StormCertStore) GetAccount(email string) (*AcmeAccount, error) {
+	var account AcmeAccount
+	err := s.db.One("Email", email, &account)
+	if err != nil {
+		return nil, err
+	}
+	return &account, nil
+}
+
+// SaveAccount 保存 ACME 账户
+func (s *StormCertStore) SaveAccount(account *AcmeAccount) error {
+	if account.CreatedAt == 0 {
+		account.CreatedAt = time.Now().Unix()
+	}
+	return s.db.Save(account)
 }

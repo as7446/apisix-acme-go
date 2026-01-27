@@ -22,14 +22,15 @@ func main() {
 	// 证书元数据存储
 	store, err := NewStormCertStore(cfg)
 	if err != nil {
-		Log.Fatalf("初始化证书元数据存储失败：%v", err)
+		Log.Error("初始化证书元数据存储失败", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
 	// 证书缓存
 	certCache := NewCertCache(cfg)
 	if err := certCache.Load(); err != nil {
-		Log.Printf("加载证书缓存失败：%v", err)
+		Log.Error("加载证书缓存失败", "error", err)
 	}
 
 	// HTTP-01 验证存储
@@ -38,7 +39,8 @@ func main() {
 	// ACME 管理器
 	acmeMgr, err := NewAcmeManager(cfg, store, certCache, httpChallengeStore, apiClient)
 	if err != nil {
-		Log.Fatalf("初始化 ACME 管理器失败：%v", err)
+		Log.Error("初始化 ACME 管理器失败", "error", err)
+		os.Exit(1)
 	}
 
 	// 任务管理器
@@ -50,20 +52,22 @@ func main() {
 	srv := &http.Server{
 		Addr:         cfg.Listen,
 		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  time.Duration(cfg.ServerReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(cfg.ServerWriteTimeout) * time.Second,
 	}
 
 	// 启动所有定时任务
 	syncMgr := NewSyncManager(cfg, store, apiClient, certCache)
 	if err := StartAllCrons(cfg, store, acmeMgr, syncMgr); err != nil {
-		Log.Fatalf("启动定时任务失败：%v", err)
+		Log.Error("启动定时任务失败", "error", err)
+		os.Exit(1)
 	}
 
 	go func() {
-		Log.Printf("服务启动中，监听地址：%s", cfg.Listen)
+		Log.Info("服务启动中", "listen", cfg.Listen)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			Log.Fatalf("服务启动失败：%v", err)
+			Log.Error("服务启动失败", "error", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -75,13 +79,13 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		Log.Printf("服务关闭错误：%v", err)
+		Log.Error("服务关闭错误", "error", err)
 	}
 
 	// 关闭数据库连接
 	if err := store.Close(); err != nil {
-		Log.Printf("关闭数据库连接失败：%v", err)
+		Log.Error("关闭数据库连接失败", "error", err)
 	}
 
-	Log.Println("服务已停止")
+	Log.Info("服务已停止")
 }

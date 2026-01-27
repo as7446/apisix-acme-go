@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -26,19 +25,24 @@ type APIResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func checkBearer(r *http.Request, token string) bool {
-	if token == "" {
-		return true // 未配置 token 则不校验
+func AuthMiddleware(token string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if token == "" {
+			c.Next()
+			return
+		}
+		auth := c.GetHeader("Authorization")
+		if auth == "" {
+			c.AbortWithStatusJSON(401, APIResponse{Code: 401, Message: "未授权"})
+			return
+		}
+		const prefix = "Bearer "
+		if !strings.HasPrefix(auth, prefix) || strings.TrimSpace(auth[len(prefix):]) != token {
+			c.AbortWithStatusJSON(401, APIResponse{Code: 401, Message: "未授权"})
+			return
+		}
+		c.Next()
 	}
-	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return false
-	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return false
-	}
-	return strings.TrimSpace(auth[len(prefix):]) == token
 }
 
 func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixClient, cache *CertCache, httpStore *HTTPChallengeStore) *gin.Engine {
@@ -53,21 +57,18 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			return
 		}
 		if keyAuth, ok := httpStore.Get(token); ok {
-			Log.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
+			Log.Info("HTTP-01 验证请求命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
 			c.String(200, keyAuth)
 			return
 		}
-		Log.Printf("HTTP-01 验证请求：host=%s, url=http://%s%s, token=%s, 未命中", c.Request.Host, c.Request.Host, c.Request.RequestURI, token)
+		Log.Info("HTTP-01 验证请求未命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
 		c.String(404, "token not found")
 	})
 
 	apiGroup := r.Group("/apisix_acme")
+	apiGroup.Use(AuthMiddleware(cfg.BearerToken))
 
 	apiGroup.POST("/task_create", func(c *gin.Context) {
-		if !checkBearer(c.Request, cfg.BearerToken) {
-			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
-			return
-		}
 		var req CreateTaskRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(400, APIResponse{Code: 400, Message: "请求参数格式错误"})
@@ -97,10 +98,6 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 	})
 
 	apiGroup.GET("/task_status", func(c *gin.Context) {
-		if !checkBearer(c.Request, cfg.BearerToken) {
-			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
-			return
-		}
 		domain := c.Query("domain")
 		if domain == "" {
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
@@ -133,10 +130,6 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 	})
 
 	apiGroup.GET("/cert_info", func(c *gin.Context) {
-		if !checkBearer(c.Request, cfg.BearerToken) {
-			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
-			return
-		}
 		domain := c.Query("domain")
 		if domain == "" {
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
@@ -163,10 +156,6 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 	})
 
 	apiGroup.DELETE("/cert_delete", func(c *gin.Context) {
-		if !checkBearer(c.Request, cfg.BearerToken) {
-			c.JSON(401, APIResponse{Code: 401, Message: "未授权"})
-			return
-		}
 		domain := c.Query("domain")
 		if domain == "" {
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})

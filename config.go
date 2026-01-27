@@ -20,6 +20,11 @@ type Config struct {
 	TaskCleanupCron  string `yaml:"task_cleanup_cron"`
 	TaskRetentionHrs int    `yaml:"task_retention_hours"`
 
+	// Client/Server Config
+	HTTPTimeout        int `yaml:"http_timeout"`         // HTTP Client Timeout (seconds)
+	ServerReadTimeout  int `yaml:"server_read_timeout"`  // Server Read Timeout (seconds)
+	ServerWriteTimeout int `yaml:"server_write_timeout"` // Server Write Timeout (seconds)
+
 	// ACME 配置
 	AcmeDirectoryURL string            `yaml:"acme_directory_url"`
 	AcmeDNSProvider  string            `yaml:"acme_dns_provider"`
@@ -79,6 +84,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.ChallengeRoute.UpstreamScheme == "" {
 		cfg.ChallengeRoute.UpstreamScheme = "http"
+	}
+	if cfg.HTTPTimeout <= 0 {
+		cfg.HTTPTimeout = 15
+	}
+	if cfg.ServerReadTimeout <= 0 {
+		cfg.ServerReadTimeout = 15
+	}
+	if cfg.ServerWriteTimeout <= 0 {
+		cfg.ServerWriteTimeout = 30
 	}
 	return &cfg, nil
 }
