@@ -402,14 +402,13 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 func (m *AcmeManager) RenewAll() {
 	list, err := m.store.FindNeedRenew(m.cfg.RenewBeforeDays)
 	if len(list) == 0 {
-		Log.Info("未发现续期证书")
 		return
 	}
-	Log.Info("续期证书：", list)
 	certs := make([]string, len(list))
-	for _, cert := range list {
-		certs = append(certs, cert.Domain)
+	for i := range list {
+		certs = append(certs, list[i].Domain)
 	}
+	Log.Info("检测到续期证书：", certs)
 	if err != nil {
 		Log.Error("查询需要续期的证书失败", "error", err)
 		return

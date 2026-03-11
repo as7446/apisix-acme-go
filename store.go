@@ -386,7 +386,6 @@ func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, err
 
 	result := make([]*Certificate, 0)
 	for i := range certs {
-		Log.Info("过期时间：", time.Unix(certs[i].NotAfter, 0).Format("2006-01-02 15:04:05"))
 		// 如果证书需要续期（notAfter - now <= renewWindow）
 		if certs[i].NotAfter <= threshold {
 			// 检查锁是否有效
