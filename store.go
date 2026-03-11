@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"github.com/asdine/storm/v3/q"
 	"os"
@@ -163,12 +164,12 @@ func (s *StormCertStore) Close() error {
 	return nil
 }
 
-// Get 获取证书元数据（不含已删除）
+// Get 获取证书元数据，不包括以删除的
 func (s *StormCertStore) Get(domain string) (*Certificate, bool) {
 	var cert Certificate
 	err := s.db.One("Domain", domain, &cert)
 	if err != nil {
-		if err == storm.ErrNotFound {
+		if errors.Is(err, storm.ErrNotFound) {
 			return nil, false
 		}
 		Log.Error("查询证书元数据失败", "domain", domain, "error", err)
@@ -241,7 +242,7 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 	return nil
 }
 
-// GetByAPISIXID 按 APISIX SSL ID 查询证书（含已删除）
+// GetByAPISIXID 按 APISIX SSL ID 查询证书，包括已删除的
 func (s *StormCertStore) GetByAPISIXID(apisixID string) (*Certificate, bool) {
 	var certs []Certificate
 	if err := s.db.Find("APISIXID", apisixID, &certs); err != nil {
@@ -294,28 +295,11 @@ func (s *StormCertStore) UpdateCertSyncState(domain string, status CertStatus, s
 	return nil
 }
 
-// All 获取所有未删除的证书
+// All 获取所有证书
 func (s *StormCertStore) All() ([]*Certificate, error) {
 	var certs []Certificate
 	err := s.db.All(&certs)
-	if err != nil && err != storm.ErrNotFound {
-		return nil, fmt.Errorf("查询所有证书失败：%w", err)
-	}
-
-	result := make([]*Certificate, 0, len(certs))
-	for i := range certs {
-		if !certs[i].Deleted {
-			result = append(result, &certs[i])
-		}
-	}
-	return result, nil
-}
-
-// AllIncludeDeleted 获取所有证书（含软删除记录），供 sync 阶段感知 Deleting 状态
-func (s *StormCertStore) AllIncludeDeleted() ([]*Certificate, error) {
-	var certs []Certificate
-	err := s.db.All(&certs)
-	if err != nil && err != storm.ErrNotFound {
+	if err != nil && !errors.Is(storm.ErrNotFound, err) {
 		return nil, fmt.Errorf("查询所有证书失败：%w", err)
 	}
 
@@ -331,10 +315,10 @@ func (s *StormCertStore) SaveTask(domain string, status string, errMsg string) e
 	now := time.Now().Unix()
 	var rec TaskRecord
 	qErr := s.db.One("Domain", domain, &rec)
-	if qErr != nil && qErr != storm.ErrNotFound {
+	if qErr != nil && !errors.Is(qErr, storm.ErrNotFound) {
 		return fmt.Errorf("查询任务记录失败：%w", qErr)
 	}
-	if qErr == storm.ErrNotFound {
+	if errors.Is(qErr, storm.ErrNotFound) {
 		rec.CreatedAt = now
 		rec.Domain = domain
 	}
@@ -361,7 +345,7 @@ func (s *StormCertStore) GetTaskRecord(domain string) (*TaskRecord, bool) {
 func (s *StormCertStore) CleanupTasks(retentionHours int) error {
 	cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour).Unix()
 	var recs []TaskRecord
-	if err := s.db.All(&recs); err != nil && err != storm.ErrNotFound {
+	if err := s.db.All(&recs); err != nil && !errors.Is(storm.ErrNotFound, err) {
 		return fmt.Errorf("查询任务记录失败：%w", err)
 	}
 	for i := range recs {
@@ -380,7 +364,7 @@ func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, err
 
 	var certs []Certificate
 	err := s.db.Select(q.Eq("Deleted", false)).Find(&certs)
-	if err != nil && err != storm.ErrNotFound {
+	if err != nil && !errors.Is(err, storm.ErrNotFound) {
 		return nil, fmt.Errorf("查询证书失败：%w", err)
 	}
 
@@ -426,7 +410,7 @@ func (s *StormCertStore) LockRenew(domain string) (bool, error) {
 		return false, fmt.Errorf("锁定续期失败：%w", err)
 	}
 
-	Log.Info("续期已锁定", "domain", domain)
+	Log.Debug("续期已锁定", "domain", domain)
 
 	return true, nil
 }
@@ -445,7 +429,7 @@ func (s *StormCertStore) UnlockRenew(domain string) error {
 		return fmt.Errorf("解锁续期失败：%w", err)
 	}
 
-	Log.Info("续期已解锁", "domain", domain)
+	Log.Debug("续期已解锁", "domain", domain)
 	return nil
 }
 

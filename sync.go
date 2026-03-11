@@ -86,7 +86,7 @@ func (m *SyncManager) Sync() error {
 	}
 
 	// ── 获取本地全量记录（含 Deleting 状态的软删除记录） ──────────────────
-	localCerts, err := m.store.AllIncludeDeleted()
+	localCerts, err := m.store.All()
 	if err != nil {
 		return fmt.Errorf("获取本地证书列表失败：%w", err)
 	}

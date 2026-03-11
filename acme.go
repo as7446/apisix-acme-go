@@ -339,7 +339,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		if err := m.certCache.Put(domain, certPEM, keyPEM, notBefore, notAfter); err != nil {
 			Log.Error("保存证书到缓存失败", "error", err)
 		}
-		Log.Info("证书申请成功", "domain", domain, "not_after", time.Unix(notAfter, 0).Format("2006-01-02 15:04:05"))
+		//Log.Info("证书申请成功", "domain", domain, "not_after", time.Unix(notAfter, 0).Format("2006-01-02 15:04:05"))
 	}
 
 	// 计算 fingerprint 和 serial number
@@ -375,7 +375,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	}
 	// 清除续期中标志和 OrderURL
 	_ = m.store.SetRenewing(domain, false, "")
-	Log.Info("证书元数据已保存到数据库", "domain", domain, "fingerprint", fingerprint, "revision", cert.Revision)
+	//Log.Info("证书元数据已保存到数据库", "domain", domain, "fingerprint", fingerprint, "revision", cert.Revision)
 
 	// 再上传到 APISIX（携带 revision label；失败则由 sync 任务重试）
 	apisixID := domain
@@ -404,11 +404,11 @@ func (m *AcmeManager) RenewAll() {
 	if len(list) == 0 {
 		return
 	}
-	certs := make([]string, len(list))
+	var certs []string
 	for i := range list {
 		certs = append(certs, list[i].Domain)
 	}
-	Log.Info("检测到续期证书：", certs)
+	Log.Info("检测到续期证书：", "domains:", strings.Join(certs, ","))
 	if err != nil {
 		Log.Error("查询需要续期的证书失败", "error", err)
 		return
@@ -427,7 +427,7 @@ func (m *AcmeManager) RenewAll() {
 				return
 			}
 			if !locked {
-				Log.Info("证书续期已被锁定，跳过", "domain", cert.Domain)
+				//Log.Info("证书续期已被锁定，跳过", "domain", cert.Domain)
 				return
 			}
 			// 闭包返回时立即解锁（本次迭代结束即释放，不影响其他证书）
@@ -442,8 +442,8 @@ func (m *AcmeManager) RenewAll() {
 			// 1. 检查缓存：仅当缓存证书完全在续期窗口之外时才直接同步到 APISIX 并跳过续期
 			cached, hasCache := m.certCache.Get(cert.Domain)
 			if hasCache && cached.NotAfter > renewThreshold {
-				// 缓存证书有效且不在续期窗口——同步到 APISIX 即可，无需重新签发
-				Log.Info("续期任务：缓存证书充足，同步到 APISIX", "domain", cert.Domain,
+				// 缓存证书有效且不在续期窗口则同步到 APISIX，无需重新签发
+				Log.Info("续期任务：缓存证书时间充足，同步到 APISIX", "domain", cert.Domain,
 					"not_after", time.Unix(cached.NotAfter, 0).Format("2006-01-02"))
 				managedLabels := map[string]string{
 					"managed-by":      m.cfg.ManagedByLabel,
@@ -466,7 +466,7 @@ func (m *AcmeManager) RenewAll() {
 				return
 			}
 
-			// 2. 缓存不存在、已过期或在续期窗口内——强制重新签发新证书
+			// 2. 缓存不存在、已过期或在续期窗口内则强制重新签发新证书
 			// 使用 force=true 跳过 RequestCertificate 内部的缓存复用判断，确保真正向 ACME 申请
 			Log.Info("开始续期证书（强制签发）", "domain", cert.Domain,
 				"not_after", time.Unix(cert.NotAfter, 0).Format("2006-01-02"),
