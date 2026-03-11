@@ -29,10 +29,12 @@ func NewApisixClient(cfg *Config) *ApisixClient {
 }
 
 type ApisixSSLObject struct {
-	ID   string   `json:"id,omitempty"`
-	SNIs []string `json:"snis"`
-	Cert string   `json:"cert"`
-	Key  string   `json:"key"`
+	ID         string            `json:"id,omitempty"`
+	SNIs       []string          `json:"snis"`
+	Cert       string            `json:"cert"`
+	Key        string            `json:"key"`
+	Labels     map[string]string `json:"labels,omitempty"`
+	UpdateTime int64             `json:"update_time,omitempty"` // APISIX 返回的 unix 时间戳
 }
 
 func normalizeAPISIXID(domain string) string {
@@ -112,18 +114,17 @@ func (c *ApisixClient) ListSSLs() (map[string]*ApisixSSLObject, error) {
 	sslMap := make(map[string]*ApisixSSLObject)
 	for _, item := range result.List {
 		ssl := item.Value
-		if len(ssl.SNIs) > 0 {
-			domain := ssl.SNIs[0]
-			if strings.HasPrefix(domain, "wildcard.") {
-				domain = strings.Replace(domain, "wildcard.", "*.", 1)
+		// 以 APISIX SSL ID 为 map key（稳定唯一）
+		key := ssl.ID
+		if key == "" && len(ssl.SNIs) > 0 {
+			key = ssl.SNIs[0]
+		}
+		if key != "" {
+			if strings.HasPrefix(key, "wildcard.") {
+				key = strings.Replace(key, "wildcard.", "*.", 1)
 			}
-			sslMap[domain] = &ssl
-		} else if ssl.ID != "" {
-			domain := ssl.ID
-			if strings.HasPrefix(domain, "wildcard.") {
-				domain = strings.Replace(domain, "wildcard.", "*.", 1)
-			}
-			sslMap[domain] = &ssl
+			copy := ssl
+			sslMap[key] = &copy
 		}
 	}
 
@@ -157,14 +158,39 @@ func (c *ApisixClient) DeleteCertificate(id string) error {
 	return nil
 }
 
-// UpsertCertificate 创建或更新证书
-func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyPEM string, expiresAt int64) error {
+// IsManagedByUs 判断该 SSL 资源是否由本服务管理（依据 managed-by label）
+func (c *ApisixClient) IsManagedByUs(ssl *ApisixSSLObject, label string) bool {
+	if ssl == nil || ssl.Labels == nil {
+		return false
+	}
+	v, ok := ssl.Labels["managed-by"]
+	return ok && v == label
+}
+
+// GetRevisionFromSSL 从 APISIX SSL 的 labels 中解析本地 revision（x-acme-revision）
+// 用于冲突决策：本地 revision > APISIX revision → 本地推送；反之 → 拉取
+func (c *ApisixClient) GetRevisionFromSSL(ssl *ApisixSSLObject) int {
+	if ssl == nil || ssl.Labels == nil {
+		return 0
+	}
+	s, ok := ssl.Labels["x-acme-revision"]
+	if !ok {
+		return 0
+	}
+	var rev int
+	_, _ = fmt.Sscanf(s, "%d", &rev)
+	return rev
+}
+
+// UpsertCertificate 创建或更新证书（携带 managed-by label）
+func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyPEM string, expiresAt int64, labels map[string]string) error {
 	normalizedID := normalizeAPISIXID(id)
 	obj := ApisixSSLObject{
-		ID:   normalizedID,
-		SNIs: snis,
-		Cert: certPEM,
-		Key:  keyPEM,
+		ID:     normalizedID,
+		SNIs:   snis,
+		Cert:   certPEM,
+		Key:    keyPEM,
+		Labels: labels,
 	}
 	body, err := json.Marshal(obj)
 	if err != nil {

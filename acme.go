@@ -200,10 +200,19 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	now := time.Now().Unix()
 	cached, hasCache := m.certCache.Get(domain)
 
+	// 幂等检查：如果正在续期中（Renewing=true 且未超时），直接跳过
+	// 注：超时重置由 sync.reconcileCert 负责（1 小时锁超时）
+	if hasLocalMeta && localMeta.Renewing && !force {
+		Log.Info("证书续期中，跳过重复申请（幂等保护）", "domain", domain,
+			"order_url", localMeta.AcmeOrderURL)
+		return localMeta, nil
+	}
+
 	// 2. 如果有有效缓存，直接覆盖 APISIX
 	if hasCache && cached.NotAfter > now && !force {
 		Log.Info("缓存证书覆盖 APISIX", "domain", domain, "not_after", time.Unix(cached.NotAfter, 0).Format("2006-01-02 15:04:05"))
-		if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
+		managedLabels := map[string]string{"managed-by": m.cfg.ManagedByLabel}
+		if err := m.apisix.UpsertCertificate(domain, []string{domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter, managedLabels); err != nil {
 			return nil, fmt.Errorf("缓存上传证书到 APISIX 失败：%w", err)
 		}
 
@@ -250,8 +259,11 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 	var certPEM, keyPEM string
 	var notBefore, notAfter int64
 
-	if cached, ok := m.certCache.Get(domain); ok && !force {
-		// 如果缓存中有有效证书且不是强制申请，使用缓存
+	// 只有当缓存证书不在续期窗口（NotAfter 充足）时才直接使用缓存；
+	// 若证书即将到期（needNewCert=true 或 NotAfter 在续期阈值内），必须走 ACME 签发。
+	renewThreshold := now + int64(m.cfg.RenewBeforeDays*24*int(time.Hour/time.Second))
+	if cached, ok := m.certCache.Get(domain); ok && !force && cached.NotAfter > renewThreshold {
+		// 缓存证书充足（不在续期窗口内），直接使用
 		Log.Info("使用缓存的证书", "domain", domain)
 		certPEM = cached.CertPEM
 		keyPEM = cached.KeyPEM
@@ -293,8 +305,14 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		} else {
 			Log.Info("开始申请证书", "domain", domain)
 		}
+		// 幂等保护：在发起 ACME 之前标记续期中，防止并发重复续期
+		// 锁超时（1h）由 sync.reconcileCert 负责重置
+		_ = m.store.SetRenewing(domain, true, "")
+
 		certRes, err := client.Certificate.Obtain(req)
 		if err != nil {
+			// 申请失败：清除续期锁，让下次重试
+			_ = m.store.SetRenewing(domain, false, "")
 			errMsg := fmt.Sprintf("申请证书失败：%v", err)
 			if strings.Contains(err.Error(), "invalid character '<'") {
 				errMsg += "（DNS Provider API 返回了 HTML 而非 JSON，可能是 API Token/Key 无效或配置错误）"
@@ -321,7 +339,7 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		if err := m.certCache.Put(domain, certPEM, keyPEM, notBefore, notAfter); err != nil {
 			Log.Error("保存证书到缓存失败", "error", err)
 		}
-		Log.Info("证书申请成功", "domain", domain, "not_after", time.Unix(notAfter, 0).Format("2006-01-02 15:04:05"))
+		//Log.Info("证书申请成功", "domain", domain, "not_after", time.Unix(notAfter, 0).Format("2006-01-02 15:04:05"))
 	}
 
 	// 计算 fingerprint 和 serial number
@@ -345,21 +363,36 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 		APISIXID:     normalizedAPISIXID,
 		Fingerprint:  fingerprint,
 		SerialNumber: serialNumber,
+		Status:       CertStatusIssued,
+		LastIssuedAt: now,
 	}
 	if hasLocalMeta {
 		cert.CreatedAt = localMeta.CreatedAt
 	}
-	// 先保存到数据库，确保证书不会丢失
+	// 先保存到数据库（确保证书不丢失），同时清除续期锁
 	if err := m.store.Upsert(cert); err != nil {
 		return nil, fmt.Errorf("保存证书元数据失败：%w", err)
 	}
-	Log.Info("证书元数据已保存到数据库", "domain", domain, "fingerprint", fingerprint)
+	// 清除续期中标志和 OrderURL
+	_ = m.store.SetRenewing(domain, false, "")
+	//Log.Info("证书元数据已保存到数据库", "domain", domain, "fingerprint", fingerprint, "revision", cert.Revision)
 
-	// 再上传到 APISIX（如果失败，证书已安全保存，sync 任务会重试）
+	// 再上传到 APISIX（携带 revision label；失败则由 sync 任务重试）
 	apisixID := domain
-	if err := m.apisix.UpsertCertificate(apisixID, []string{domain}, certPEM, keyPEM, notAfter); err != nil {
-		Log.Error("APISIX 上传证书失败（证书已保存到数据库，sync 任务会重试）", "domain", domain, "cert_path", m.certCache.GetCertPath(domain), "error", err)
-		// 不返回错误，因为证书已经安全保存
+	// 上传时从 DB 读取最新 revision（Upsert 已自增）
+	revision := cert.Revision
+	if updated, ok := m.store.Get(domain); ok {
+		revision = updated.Revision
+	}
+	managedLabels := map[string]string{
+		"managed-by":      m.cfg.ManagedByLabel,
+		"x-acme-revision": fmt.Sprintf("%d", revision),
+	}
+	if err := m.apisix.UpsertCertificate(apisixID, []string{domain}, certPEM, keyPEM, notAfter, managedLabels); err != nil {
+		Log.Error("APISIX 上传证书失败（证书已保存到数据库，sync 任务会重试）",
+			"domain", domain, "cert_path", m.certCache.GetCertPath(domain), "error", err)
+		_ = m.store.UpdateCertSyncState(domain, CertStatusSyncFailed, err.Error())
+		// 不返回错误，证书已安全保存
 	}
 
 	Log.Info("证书申请完成", "domain", domain, "fingerprint", fingerprint)
@@ -368,6 +401,14 @@ func (m *AcmeManager) RequestCertificate(domain string, email string, force bool
 
 func (m *AcmeManager) RenewAll() {
 	list, err := m.store.FindNeedRenew(m.cfg.RenewBeforeDays)
+	if len(list) == 0 {
+		return
+	}
+	var certs []string
+	for i := range list {
+		certs = append(certs, list[i].Domain)
+	}
+	Log.Info("检测到续期证书：", "domains:", strings.Join(certs, ","))
 	if err != nil {
 		Log.Error("查询需要续期的证书失败", "error", err)
 		return
@@ -376,36 +417,41 @@ func (m *AcmeManager) RenewAll() {
 	now := time.Now().Unix()
 
 	for _, cert := range list {
-		// 尝试锁定续期
-		locked, err := m.store.LockRenew(cert.Domain)
-		if err != nil {
-			Log.Error("锁定续期失败", "domain", cert.Domain, "error", err)
-			continue
-		}
-		if !locked {
-			Log.Info("证书续期已被锁定，跳过", "domain", cert.Domain)
-			continue
-		}
-
-		// 确保解锁
-		defer func(domain string) {
-			if err := m.store.UnlockRenew(domain); err != nil {
-				Log.Error("解锁续期失败", "domain", domain, "error", err)
+		// 每个证书在独立闭包中处理：确保续期锁在本次迭代结束后立即释放，
+		// 而不是等整个 RenewAll 函数返回（defer 在循环内的经典问题）。
+		func(cert *Certificate) {
+			// 尝试锁定续期
+			locked, err := m.store.LockRenew(cert.Domain)
+			if err != nil {
+				Log.Error("锁定续期失败", "domain", cert.Domain, "error", err)
+				return
 			}
-		}(cert.Domain)
+			if !locked {
+				//Log.Info("证书续期已被锁定，跳过", "domain", cert.Domain)
+				return
+			}
+			// 闭包返回时立即解锁（本次迭代结束即释放，不影响其他证书）
+			defer func() {
+				if err := m.store.UnlockRenew(cert.Domain); err != nil {
+					Log.Error("解锁续期失败", "domain", cert.Domain, "error", err)
+				}
+			}()
 
-		renewThreshold := now + int64(m.cfg.RenewBeforeDays*24*int(time.Hour/time.Second))
-		// 1. 检查缓存
-		cached, hasCache := m.certCache.Get(cert.Domain)
-		if hasCache && cached.NotAfter > now {
-			// 如果缓存证书在续期阈值内，需要续期
-			if cached.NotAfter <= renewThreshold {
-				Log.Info("续期任务：缓存证书即将到期，执行续期", "days", m.cfg.RenewBeforeDays, "domain", cert.Domain)
-			} else {
-				if err := m.apisix.UpsertCertificate(cert.Domain, []string{cert.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter); err != nil {
-					Log.Error("续期上传缓存证书到 APISIX 失败", "domain", cert.Domain, "error", err)
+			renewThreshold := now + int64(m.cfg.RenewBeforeDays*24*int(time.Hour/time.Second))
+
+			// 1. 检查缓存：仅当缓存证书完全在续期窗口之外时才直接同步到 APISIX 并跳过续期
+			cached, hasCache := m.certCache.Get(cert.Domain)
+			if hasCache && cached.NotAfter > renewThreshold {
+				// 缓存证书有效且不在续期窗口则同步到 APISIX，无需重新签发
+				Log.Info("续期任务：缓存证书时间充足，同步到 APISIX", "domain", cert.Domain,
+					"not_after", time.Unix(cached.NotAfter, 0).Format("2006-01-02"))
+				managedLabels := map[string]string{
+					"managed-by":      m.cfg.ManagedByLabel,
+					"x-acme-revision": fmt.Sprintf("%d", cert.Revision),
+				}
+				if err := m.apisix.UpsertCertificate(cert.Domain, []string{cert.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter, managedLabels); err != nil {
+					Log.Error("续期同步缓存证书到 APISIX 失败", "domain", cert.Domain, "error", err)
 				} else {
-					// 更新 fingerprint 和 serial number
 					fingerprint, _ := CalculateFingerprint(cached.CertPEM)
 					serialNumber, _ := CalculateSerialNumber(cached.CertPEM)
 					cert.NotBefore = cached.NotBefore
@@ -416,28 +462,25 @@ func (m *AcmeManager) RenewAll() {
 					if err := m.store.Upsert(cert); err != nil {
 						Log.Error("续期更新元数据失败", "domain", cert.Domain, "error", err)
 					}
-					continue
 				}
+				return
 			}
-		}
 
-		// 2. 判断是否需要续期
-		needRenew := cert.NotAfter <= renewThreshold
-
-		// 3. 如果需要续期，执行续期操作
-		if needRenew {
-			Log.Info("开始续期证书", "domain", cert.Domain)
-			newCert, err := m.RequestCertificate(cert.Domain, "", false)
+			// 2. 缓存不存在、已过期或在续期窗口内则强制重新签发新证书
+			// 使用 force=true 跳过 RequestCertificate 内部的缓存复用判断，确保真正向 ACME 申请
+			Log.Info("开始续期证书（强制签发）", "domain", cert.Domain,
+				"not_after", time.Unix(cert.NotAfter, 0).Format("2006-01-02"),
+				"renew_before_days", m.cfg.RenewBeforeDays)
+			newCert, err := m.RequestCertificate(cert.Domain, "", true)
 			if err != nil {
 				Log.Error("续期证书失败", "domain", cert.Domain, "error", err)
 			} else {
-				// 更新续期时间
 				newCert.LastRenewAt = now
 				if err := m.store.Upsert(newCert); err != nil {
 					Log.Error("更新续期时间失败", "domain", cert.Domain, "error", err)
 				}
 			}
-		}
+		}(cert)
 	}
 }
 
