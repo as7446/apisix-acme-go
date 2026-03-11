@@ -17,6 +17,8 @@ type Config struct {
 	RenewBeforeDays  int    `yaml:"renew_before_days"`
 	SyncCron         string `yaml:"sync_cron"`
 	SyncMode         string `yaml:"sync_mode"`
+	ManagedByLabel   string `yaml:"managed_by_label"` // Label value written to APISIX SSL resources to identify managed certs
+	SNIPattern       string `yaml:"sni_pattern"`      // Glob pattern for importing unmanaged certs during first sync
 	TaskCleanupCron  string `yaml:"task_cleanup_cron"`
 	TaskRetentionHrs int    `yaml:"task_retention_hours"`
 
@@ -75,6 +77,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.SyncMode == "" {
 		cfg.SyncMode = "compat"
+	}
+	if cfg.ManagedByLabel == "" {
+		cfg.ManagedByLabel = "apisix-acme-go"
 	}
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"

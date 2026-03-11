@@ -14,6 +14,32 @@ import (
 	"github.com/asdine/storm/v3/codec/gob"
 )
 
+// CertStatus 证书同步状态枚举
+type CertStatus string
+
+const (
+	// CertStatusPending 待推送到 APISIX（新建未上传，或上次上传失败）
+	CertStatusPending CertStatus = "pending"
+	// CertStatusIssued 已签发并成功推送到 APISIX
+	CertStatusIssued CertStatus = "issued"
+	// CertStatusRenewing 正在执行 ACME 续期（防止并发重复续期）
+	CertStatusRenewing CertStatus = "renewing"
+	// CertStatusSyncFailed 最近一次同步失败
+	CertStatusSyncFailed CertStatus = "sync_failed"
+	// CertStatusDeleting 标记为待删除（等待 sync 从 APISIX 侧删除后再清除 DB 记录）
+	CertStatusDeleting CertStatus = "deleting"
+)
+
+// CertSource 证书来源
+type CertSource string
+
+const (
+	// CertSourceManaged 由本服务签发和管理
+	CertSourceManaged CertSource = "managed"
+	// CertSourceExternal 从 APISIX 导入的外部证书（不由本服务签发，只做代管）
+	CertSourceExternal CertSource = "external"
+)
+
 // Certificate 证书元数据
 type Certificate struct {
 	ID           int      `storm:"id,increment"`
@@ -30,6 +56,28 @@ type Certificate struct {
 	RenewLockAt  int64    `storm:"index"`
 	Deleted      bool     `storm:"index"`
 	DeletedAt    int64    `storm:"index"`
+	// 同步状态（旧记录零值为 "" 视为 pending/issued 兼容处理）
+	Status       CertStatus `storm:"index"` // 当前同步状态
+	Source       CertSource `storm:"index"` // 证书来源（managed / external）
+	LastSyncedAt int64      `storm:"index"` // 最近一次成功 reconcile 的时间
+	SyncError    string     // 最近一次同步失败原因
+	// 资源版本（每次 Upsert 自增，同步到 APISIX label 用于冲突解决）
+	Revision     int    `storm:"index"` // 本地资源版本号
+	Renewing     bool   `storm:"index"` // 是否正在执行 ACME 续期
+	LastIssuedAt int64  `storm:"index"` // 最近一次 ACME 签发成功时间
+	AcmeOrderURL string // ACME Order URL（幂等续期用）
+}
+
+// effectiveStatus 兼容旧记录（Status 为空时按 Deleted 字段推断）
+func (c *Certificate) effectiveStatus() CertStatus {
+	if c.Status != "" {
+		return c.Status
+	}
+	// 兼容旧记录
+	if c.Deleted {
+		return CertStatusDeleting
+	}
+	return CertStatusIssued
 }
 
 // TaskRecord 任务记录
@@ -114,7 +162,7 @@ func (s *StormCertStore) Close() error {
 	return nil
 }
 
-// Get 获取证书元数据
+// Get 获取证书元数据（不含已删除）
 func (s *StormCertStore) Get(domain string) (*Certificate, bool) {
 	var cert Certificate
 	err := s.db.One("Domain", domain, &cert)
@@ -159,9 +207,24 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 			cert.Deleted = false
 			cert.DeletedAt = 0
 		}
+		// 保留 Source 若新值未指定
+		if cert.Source == "" {
+			cert.Source = existing.Source
+		}
+		// Revision 自增（确保每次 Upsert 都产生新版本号）
+		if cert.Revision <= existing.Revision {
+			cert.Revision = existing.Revision + 1
+		}
 	} else {
 		if cert.CreatedAt == 0 {
 			cert.CreatedAt = now
+		}
+		if cert.Source == "" {
+			cert.Source = CertSourceManaged
+		}
+		// 新记录从 revision=1 开始
+		if cert.Revision == 0 {
+			cert.Revision = 1
 		}
 	}
 
@@ -172,8 +235,61 @@ func (s *StormCertStore) Upsert(cert *Certificate) error {
 		return fmt.Errorf("保存证书元数据失败：%w", err)
 	}
 
-	Log.Info("证书元数据已保存", "domain", cert.Domain, "fingerprint", cert.Fingerprint)
+	Log.Info("证书元数据已保存", "domain", cert.Domain, "fingerprint", cert.Fingerprint, "revision", cert.Revision)
 
+	return nil
+}
+
+// GetByAPISIXID 按 APISIX SSL ID 查询证书（含已删除）
+func (s *StormCertStore) GetByAPISIXID(apisixID string) (*Certificate, bool) {
+	var certs []Certificate
+	if err := s.db.Find("APISIXID", apisixID, &certs); err != nil {
+		return nil, false
+	}
+	if len(certs) == 0 {
+		return nil, false
+	}
+	return &certs[0], true
+}
+
+// SetRenewing 设置证书续期中标志（不触发 Revision 自增，避免与推送逻辑冲突）
+func (s *StormCertStore) SetRenewing(domain string, renewing bool, orderURL string) error {
+	cert, exists := s.GetWithDeleted(domain)
+	if !exists {
+		return fmt.Errorf("证书不存在：%s", domain)
+	}
+
+	cert.Renewing = renewing
+	cert.AcmeOrderURL = orderURL
+	if renewing {
+		cert.Status = CertStatusRenewing
+	}
+	cert.UpdatedAt = time.Now().Unix()
+
+	if err := s.db.Save(cert); err != nil {
+		return fmt.Errorf("设置续期状态失败：%w", err)
+	}
+	return nil
+}
+
+// UpdateCertSyncState 按证书粒度更新同步状态（不覆盖其他字段）
+func (s *StormCertStore) UpdateCertSyncState(domain string, status CertStatus, syncErr string) error {
+	cert, exists := s.GetWithDeleted(domain)
+	if !exists {
+		return fmt.Errorf("证书不存在：%s", domain)
+	}
+
+	now := time.Now().Unix()
+	cert.Status = status
+	cert.SyncError = syncErr
+	if status == CertStatusIssued {
+		cert.LastSyncedAt = now
+	}
+	cert.UpdatedAt = now
+
+	if err := s.db.Save(cert); err != nil {
+		return fmt.Errorf("更新证书同步状态失败：%w", err)
+	}
 	return nil
 }
 
@@ -190,6 +306,21 @@ func (s *StormCertStore) All() ([]*Certificate, error) {
 		if !certs[i].Deleted {
 			result = append(result, &certs[i])
 		}
+	}
+	return result, nil
+}
+
+// AllIncludeDeleted 获取所有证书（含软删除记录），供 sync 阶段感知 Deleting 状态
+func (s *StormCertStore) AllIncludeDeleted() ([]*Certificate, error) {
+	var certs []Certificate
+	err := s.db.All(&certs)
+	if err != nil && err != storm.ErrNotFound {
+		return nil, fmt.Errorf("查询所有证书失败：%w", err)
+	}
+
+	result := make([]*Certificate, 0, len(certs))
+	for i := range certs {
+		result = append(result, &certs[i])
 	}
 	return result, nil
 }
@@ -254,7 +385,7 @@ func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, err
 
 	result := make([]*Certificate, 0)
 	for i := range certs {
-		// 如果证书需要续期
+		// 如果证书需要续期（notAfter - now <= renewWindow）
 		if certs[i].NotAfter <= threshold {
 			// 检查锁是否有效
 			isLocked := false
@@ -317,7 +448,7 @@ func (s *StormCertStore) UnlockRenew(domain string) error {
 	return nil
 }
 
-// MarkDeleted 标记为已删除
+// MarkDeleted 标记为删除中（Deleting 状态），等待 sync 从 APISIX 侧删除
 func (s *StormCertStore) MarkDeleted(domain string) error {
 	cert, exists := s.GetWithDeleted(domain)
 	if !exists {
@@ -327,6 +458,7 @@ func (s *StormCertStore) MarkDeleted(domain string) error {
 	cert.Deleted = true
 	cert.DeletedAt = time.Now().Unix()
 	cert.UpdatedAt = time.Now().Unix()
+	cert.Status = CertStatusDeleting
 	err := s.db.Save(cert)
 	if err != nil {
 		return fmt.Errorf("标记删除失败：%w", err)
@@ -351,13 +483,13 @@ func (s *StormCertStore) RestoreDeleted(domain string) error {
 	cert.Deleted = false
 	cert.DeletedAt = 0
 	cert.UpdatedAt = time.Now().Unix()
+	cert.Status = CertStatusPending // 恢复后标记为待同步
 	err := s.db.Save(cert)
 	if err != nil {
 		return fmt.Errorf("恢复证书失败：%w", err)
 	}
 
 	Log.Info("证书已恢复", "domain", domain)
-
 	return nil
 }
 
