@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"github.com/asdine/storm/v3/q"
 	"os"
 	"path/filepath"
 	"time"
@@ -378,7 +379,7 @@ func (s *StormCertStore) FindNeedRenew(renewBeforeDays int) ([]*Certificate, err
 	lockTimeout := int64(3600) // 锁超时时间 1 小时
 
 	var certs []Certificate
-	err := s.db.Find("Deleted", false, &certs)
+	err := s.db.Select(q.Eq("Deleted", false)).Find(&certs)
 	if err != nil && err != storm.ErrNotFound {
 		return nil, fmt.Errorf("查询证书失败：%w", err)
 	}
