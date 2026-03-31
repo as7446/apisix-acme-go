@@ -41,6 +41,10 @@ acme_dns_provider: ""
 #   CF_DNS_API_TOKEN: "xxx"
 acme_dns_env: {}
 
+# 证书申请失败重试：指数退避，最多 max 次
+cert_retry_max: 3
+cert_retry_delay: 2
+
 # 自动在 APISIX 中创建/更新 HTTP-01 路由
 challenge_route:
   enable: true

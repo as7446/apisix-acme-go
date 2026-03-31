@@ -137,10 +137,29 @@ func (m *TaskManager) runTask(domain string, email string, force bool) {
 
 	Log.Info("任务开始执行", "domain", domain)
 	m.updateTaskStatus(domain, TaskStatusRunning, "")
-	meta, err := m.acme.RequestCertificate(domain, email, force)
-	if err != nil {
-		Log.Error("证书申请任务失败", "domain", domain, "error", err)
-		m.updateTaskStatus(domain, TaskStatusError, err.Error())
+
+	maxRetries := m.acme.cfg.CertRetryMax
+	baseDelay := time.Duration(m.acme.cfg.CertRetryDelay) * time.Second
+
+	var meta *Certificate
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := baseDelay * (1 << (attempt - 1)) // 2s, 4s, 8s ...
+			Log.Warn("证书申请失败，准备重试",
+				"domain", domain, "attempt", attempt, "max", maxRetries,
+				"delay", delay, "error", lastErr)
+			time.Sleep(delay)
+		}
+		meta, lastErr = m.acme.RequestCertificate(domain, email, force)
+		if lastErr == nil {
+			break
+		}
+	}
+	if lastErr != nil {
+		Log.Error("证书申请任务失败",
+			"domain", domain, "retries", maxRetries, "error", lastErr)
+		m.updateTaskStatus(domain, TaskStatusError, lastErr.Error())
 		return
 	}
 	// 确保证书申请和上传都成功
