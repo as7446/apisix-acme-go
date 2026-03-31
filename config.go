@@ -33,6 +33,10 @@ type Config struct {
 	AcmeDNSEnv       map[string]string `yaml:"acme_dns_env"`
 	// ChallengeRoute HTTP-01 验证路由配置
 	ChallengeRoute ChallengeRouteConfig `yaml:"challenge_route"`
+
+	// 证书申请重试配置
+	CertRetryMax   int `yaml:"cert_retry_max"`   // 证书申请最大重试次数（默认 3）
+	CertRetryDelay int `yaml:"cert_retry_delay"` // 首次重试延迟秒数（默认 2，后续指数增长）
 }
 
 type ChallengeRouteConfig struct {
@@ -98,6 +102,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.ServerWriteTimeout <= 0 {
 		cfg.ServerWriteTimeout = 30
+	}
+	if cfg.CertRetryMax <= 0 {
+		cfg.CertRetryMax = 3
+	}
+	if cfg.CertRetryDelay <= 0 {
+		cfg.CertRetryDelay = 2
 	}
 	return &cfg, nil
 }
