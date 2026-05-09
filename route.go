@@ -5,6 +5,13 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/as7446/apisix-acme-go/internal/domain/acme"
+	"github.com/as7446/apisix-acme-go/internal/domain/cert"
+	"github.com/as7446/apisix-acme-go/internal/domain/task"
+	"github.com/as7446/apisix-acme-go/internal/infra/config"
+	"github.com/as7446/apisix-acme-go/internal/infra/logger"
+	"github.com/as7446/apisix-acme-go/internal/store/cache"
 )
 
 type CreateTaskRequest struct {
@@ -14,7 +21,7 @@ type CreateTaskRequest struct {
 }
 
 type TaskStatusResponse struct {
-	Status string `json:"status"` // 任务状态：created, running, success, error, skip
+	Status string `json:"status"`
 	Domain string `json:"domain"`
 	Error  string `json:"error,omitempty"`
 }
@@ -25,7 +32,7 @@ type APIResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func AuthMiddleware(token string) gin.HandlerFunc {
+func authMiddleware(token string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if token == "" {
 			c.Next()
@@ -45,11 +52,17 @@ func AuthMiddleware(token string) gin.HandlerFunc {
 	}
 }
 
-func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixClient, cache *CertCache, httpStore *HTTPChallengeStore) *gin.Engine {
+func newRouter(cfg *config.Config, tm *task.Manager, certRepo cert.CertRepository, apiClient *acme.ApisixClient, cache *cache.FileCache, httpStore *acme.HTTPChallengeStore) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())
 
+	// 健康检查
+	r.GET("/healthz", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	// HTTP-01 验证端点
 	r.GET("/.well-known/acme-challenge/:token", func(c *gin.Context) {
 		token := c.Param("token")
 		if token == "" {
@@ -57,16 +70,16 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			return
 		}
 		if keyAuth, ok := httpStore.Get(token); ok {
-			Log.Info("HTTP-01 验证请求命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
+			logger.Log.Info("HTTP-01 验证请求命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
 			c.String(200, keyAuth)
 			return
 		}
-		Log.Info("HTTP-01 验证请求未命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
+		logger.Log.Info("HTTP-01 验证请求未命中", "host", c.Request.Host, "url", "http://"+c.Request.Host+c.Request.RequestURI, "token", token)
 		c.String(404, "token not found")
 	})
 
 	apiGroup := r.Group("/apisix_acme")
-	apiGroup.Use(AuthMiddleware(cfg.BearerToken))
+	apiGroup.Use(authMiddleware(cfg.BearerToken))
 
 	apiGroup.POST("/task_create", func(c *gin.Context) {
 		var req CreateTaskRequest
@@ -75,13 +88,13 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			return
 		}
 
-		task := tm.CreateOrUpdateTask(req.Domain, req.Email, req.Force)
+		t := tm.CreateOrUpdateTask(req.Domain, req.Email, req.Force)
 
 		var message string
-		switch task.Status {
-		case TaskStatusSkip:
+		switch t.Status {
+		case task.TaskStatusSkip:
 			message = "证书已存在且未过期，跳过操作"
-		case TaskStatusRunning:
+		case task.TaskStatusRunning:
 			message = "证书申请中，请稍候"
 		default:
 			message = "任务已提交，请稍候"
@@ -91,8 +104,8 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			Code:    200,
 			Message: message,
 			Data: TaskStatusResponse{
-				Status: string(task.Status),
-				Domain: task.Domain,
+				Status: string(t.Status),
+				Domain: t.Domain,
 			},
 		})
 	})
@@ -103,8 +116,8 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
 			return
 		}
-		task := tm.GetTask(domain)
-		if task == nil {
+		t := tm.GetTask(domain)
+		if t == nil {
 			c.JSON(200, APIResponse{
 				Code:    200,
 				Message: "任务不存在",
@@ -117,11 +130,11 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			return
 		}
 		resp := TaskStatusResponse{
-			Status: string(task.Status),
-			Domain: task.Domain,
+			Status: string(t.Status),
+			Domain: t.Domain,
 		}
-		if task.Status == TaskStatusError && task.Error != "" {
-			resp.Error = task.Error
+		if t.Status == task.TaskStatusError && t.Error != "" {
+			resp.Error = t.Error
 		}
 		c.JSON(200, APIResponse{
 			Code: 200,
@@ -135,22 +148,22 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
 			return
 		}
-		cert, ok := store.GetWithDeleted(domain)
+		certRec, ok := certRepo.GetWithDeleted(domain)
 		if !ok {
 			c.JSON(404, APIResponse{Code: 404, Message: "未找到证书"})
 			return
 		}
 		resp := map[string]interface{}{
-			"domain":        cert.Domain,
-			"snis":          cert.SNIs,
-			"not_before":    cert.NotBefore,
-			"not_after":     cert.NotAfter,
-			"apisix_id":     cert.APISIXID,
-			"fingerprint":   cert.Fingerprint,
-			"serial_number": cert.SerialNumber,
-			"deleted":       cert.Deleted,
-			"created_at":    cert.CreatedAt,
-			"updated_at":    cert.UpdatedAt,
+			"domain":        certRec.Domain,
+			"snis":          certRec.SNIs,
+			"not_before":    certRec.NotBefore,
+			"not_after":     certRec.NotAfter,
+			"apisix_id":     certRec.APISIXID,
+			"fingerprint":   certRec.Fingerprint,
+			"serial_number": certRec.SerialNumber,
+			"deleted":       certRec.Deleted,
+			"created_at":    certRec.CreatedAt,
+			"updated_at":    certRec.UpdatedAt,
 		}
 		c.JSON(200, APIResponse{Code: 200, Data: resp, Message: "获取证书信息成功"})
 	})
@@ -161,7 +174,7 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(400, APIResponse{Code: 400, Message: "域名参数必填"})
 			return
 		}
-		rec, ok := store.GetWithDeleted(domain)
+		rec, ok := certRepo.GetWithDeleted(domain)
 		if !ok {
 			c.JSON(404, APIResponse{Code: 404, Message: "未找到证书"})
 			return
@@ -170,17 +183,14 @@ func NewRouter(cfg *Config, tm *TaskManager, store *StormCertStore, api *ApisixC
 			c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
 			return
 		}
-		//_ = cache.Remove(domain)
-		if err := api.DeleteCertificate(domain); err != nil {
+		if err := apiClient.DeleteCertificate(domain); err != nil {
 			c.JSON(500, APIResponse{Code: 500, Message: fmt.Sprintf("删除 APISIX 证书失败: %v", err)})
 			return
 		}
-		if err := store.MarkDeleted(domain); err != nil {
+		if err := certRepo.MarkDeleted(domain); err != nil {
 			c.JSON(500, APIResponse{Code: 500, Message: "标记删除失败"})
 			return
 		}
-		_ = store.SaveTask(domain, string(TaskStatusSuccess), "deleted")
-		_ = store.CleanupTasks(cfg.TaskRetentionHrs)
 		c.JSON(200, APIResponse{Code: 200, Message: "已删除"})
 	})
 

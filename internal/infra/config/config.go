@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"os"
@@ -6,7 +6,20 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// RenewLockTimeout 续期锁超时时间（秒）
+	RenewLockTimeout = 3600 // 1 小时
+	// RSAKeyBits RSA 密钥位数
+	RSAKeyBits = 2048
+	// CacheExpiryBuffer 缓存过期缓冲（秒，提前 1 天视为过期）
+	CacheExpiryBuffer = 86400
+)
+
+// Config 应用配置
 type Config struct {
+	// 运行模式：controller / agent（默认 controller）
+	Mode string `yaml:"mode"`
+
 	Listen           string `yaml:"listen"`
 	BearerToken      string `yaml:"bearer_token"`
 	ApisixAdminURL   string `yaml:"apisix_admin_url"`
@@ -37,8 +50,17 @@ type Config struct {
 	// 证书申请重试配置
 	CertRetryMax   int `yaml:"cert_retry_max"`   // 证书申请最大重试次数（默认 3）
 	CertRetryDelay int `yaml:"cert_retry_delay"` // 首次重试延迟秒数（默认 2，后续指数增长）
+
+	// 日志级别（debug / info / warn / error）
+	LogLevel string `yaml:"log_level"`
+
+	// Agent 模式配置（预留）
+	ControllerURL string `yaml:"controller_url"`
+	AgentRegion   string `yaml:"agent_region"`
+	AgentPullCron string `yaml:"agent_pull_cron"`
 }
 
+// ChallengeRouteConfig HTTP-01 验证路由配置
 type ChallengeRouteConfig struct {
 	Enable         bool     `yaml:"enable"`
 	RouteName      string   `yaml:"route_name"`
@@ -48,7 +70,18 @@ type ChallengeRouteConfig struct {
 	Priority       int      `yaml:"priority"`
 }
 
-func LoadConfig(path string) (*Config, error) {
+// IsController 当前是否为 Controller 模式
+func (c *Config) IsController() bool {
+	return c.Mode == "" || c.Mode == "controller"
+}
+
+// IsAgent 当前是否为 Agent 模式
+func (c *Config) IsAgent() bool {
+	return c.Mode == "agent"
+}
+
+// Load 加载配置文件
+func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -57,7 +90,11 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
-	// 设置默认值
+	cfg.applyDefaults()
+	return &cfg, nil
+}
+
+func (cfg *Config) applyDefaults() {
 	if cfg.Listen == "" {
 		cfg.Listen = ":8080"
 	}
@@ -109,5 +146,7 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.CertRetryDelay <= 0 {
 		cfg.CertRetryDelay = 2
 	}
-	return &cfg, nil
+	if cfg.AgentPullCron == "" {
+		cfg.AgentPullCron = "0 */30 * * * *"
+	}
 }

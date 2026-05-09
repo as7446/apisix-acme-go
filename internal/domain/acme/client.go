@@ -1,4 +1,4 @@
-package main
+package acme
 
 import (
 	"bytes"
@@ -10,40 +10,50 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/as7446/apisix-acme-go/internal/domain/cert"
+	"github.com/as7446/apisix-acme-go/internal/infra/config"
+	"github.com/as7446/apisix-acme-go/internal/infra/logger"
 )
 
-type ApisixClient struct {
-	baseURL string
-	token   string
-	client  *http.Client
-}
-
-func NewApisixClient(cfg *Config) *ApisixClient {
-	return &ApisixClient{
-		baseURL: strings.TrimRight(cfg.ApisixAdminURL, "/"),
-		token:   cfg.ApisixAdminToken,
-		client: &http.Client{
-			Timeout: time.Duration(cfg.HTTPTimeout) * time.Second,
-		},
-	}
-}
-
+// ApisixSSLObject APISIX SSL 对象
 type ApisixSSLObject struct {
 	ID         string            `json:"id,omitempty"`
 	SNIs       []string          `json:"snis"`
 	Cert       string            `json:"cert"`
 	Key        string            `json:"key"`
 	Labels     map[string]string `json:"labels,omitempty"`
-	UpdateTime int64             `json:"update_time,omitempty"` // APISIX 返回的 unix 时间戳
+	UpdateTime int64             `json:"update_time,omitempty"`
 }
 
-func normalizeAPISIXID(domain string) string {
-	return strings.ReplaceAll(domain, "*.", "wildcard.")
+// ApisixClient APISIX 客户端
+type ApisixClient struct {
+	baseURL string
+	token   string
+	client  *http.Client
+}
+
+// NewApisixClient 创建 APISIX 客户端
+func NewApisixClient(cfg *config.Config) *ApisixClient {
+	transport := &http.Transport{
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	return &ApisixClient{
+		baseURL: strings.TrimRight(cfg.ApisixAdminURL, "/"),
+		token:   cfg.ApisixAdminToken,
+		client: &http.Client{
+			Timeout:   time.Duration(cfg.HTTPTimeout) * time.Second,
+			Transport: transport,
+		},
+	}
 }
 
 // GetCertificate 获取证书信息
-func (c *ApisixClient) GetCertificate(id string) (*ApisixSSLObject, error) {
-	normalizedID := normalizeAPISIXID(id)
+func (c *ApisixClient) GetCertificate(id string) (*cert.ApisixSSLObject, error) {
+	normalizedID := cert.NormalizeAPISIXID(id)
 	url := c.resourceURL("ssl", normalizedID)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -62,7 +72,6 @@ func (c *ApisixClient) GetCertificate(id string) (*ApisixSSLObject, error) {
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
 	}
-
 	if resp.StatusCode >= 300 {
 		var respBody bytes.Buffer
 		respBody.ReadFrom(resp.Body)
@@ -70,7 +79,7 @@ func (c *ApisixClient) GetCertificate(id string) (*ApisixSSLObject, error) {
 	}
 
 	var result struct {
-		Value ApisixSSLObject `json:"value"`
+		Value cert.ApisixSSLObject `json:"value"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析响应失败：%w", err)
@@ -80,7 +89,7 @@ func (c *ApisixClient) GetCertificate(id string) (*ApisixSSLObject, error) {
 }
 
 // ListSSLs 获取所有证书列表
-func (c *ApisixClient) ListSSLs() (map[string]*ApisixSSLObject, error) {
+func (c *ApisixClient) ListSSLs() (map[string]*cert.ApisixSSLObject, error) {
 	url := c.resourceURL("ssl", "")
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -104,17 +113,16 @@ func (c *ApisixClient) ListSSLs() (map[string]*ApisixSSLObject, error) {
 
 	var result struct {
 		List []struct {
-			Value ApisixSSLObject `json:"value"`
+			Value cert.ApisixSSLObject `json:"value"`
 		} `json:"list"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("解析响应失败：%w", err)
 	}
 
-	sslMap := make(map[string]*ApisixSSLObject)
+	sslMap := make(map[string]*cert.ApisixSSLObject)
 	for _, item := range result.List {
-		ssl := item.Value
-		// 以 APISIX SSL ID 为 map key（稳定唯一）
+		ssl := &item.Value
 		key := ssl.ID
 		if key == "" && len(ssl.SNIs) > 0 {
 			key = ssl.SNIs[0]
@@ -123,8 +131,7 @@ func (c *ApisixClient) ListSSLs() (map[string]*ApisixSSLObject, error) {
 			if strings.HasPrefix(key, "wildcard.") {
 				key = strings.Replace(key, "wildcard.", "*.", 1)
 			}
-			copy := ssl
-			sslMap[key] = &copy
+			sslMap[key] = ssl
 		}
 	}
 
@@ -133,7 +140,7 @@ func (c *ApisixClient) ListSSLs() (map[string]*ApisixSSLObject, error) {
 
 // DeleteCertificate 删除证书
 func (c *ApisixClient) DeleteCertificate(id string) error {
-	normalizedID := normalizeAPISIXID(id)
+	normalizedID := cert.NormalizeAPISIXID(id)
 	url := c.resourceURL("ssl", normalizedID)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
@@ -154,12 +161,12 @@ func (c *ApisixClient) DeleteCertificate(id string) error {
 		respBody.ReadFrom(resp.Body)
 		return fmt.Errorf("APISIX 删除证书失败，状态码=%d, 响应=%s", resp.StatusCode, respBody.String())
 	}
-	Log.Info("APISIX 证书已删除", "id", normalizedID, "original_domain", id)
+	logger.Log.Info("APISIX 证书已删除", "id", normalizedID, "original_domain", id)
 	return nil
 }
 
-// IsManagedByUs 判断该 SSL 资源是否由本服务管理（依据 managed-by label）
-func (c *ApisixClient) IsManagedByUs(ssl *ApisixSSLObject, label string) bool {
+// IsManagedByUs 判断该 SSL 资源是否由本服务管理
+func (c *ApisixClient) IsManagedByUs(ssl *cert.ApisixSSLObject, label string) bool {
 	if ssl == nil || ssl.Labels == nil {
 		return false
 	}
@@ -167,9 +174,8 @@ func (c *ApisixClient) IsManagedByUs(ssl *ApisixSSLObject, label string) bool {
 	return ok && v == label
 }
 
-// GetRevisionFromSSL 从 APISIX SSL 的 labels 中解析本地 revision（x-acme-revision）
-// 用于冲突决策：本地 revision > APISIX revision → 本地推送；反之 → 拉取
-func (c *ApisixClient) GetRevisionFromSSL(ssl *ApisixSSLObject) int {
+// GetRevisionFromSSL 从 APISIX SSL 的 labels 中解析本地 revision
+func (c *ApisixClient) GetRevisionFromSSL(ssl *cert.ApisixSSLObject) int {
 	if ssl == nil || ssl.Labels == nil {
 		return 0
 	}
@@ -182,9 +188,9 @@ func (c *ApisixClient) GetRevisionFromSSL(ssl *ApisixSSLObject) int {
 	return rev
 }
 
-// UpsertCertificate 创建或更新证书（携带 managed-by label）
+// UpsertCertificate 创建或更新证书
 func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyPEM string, expiresAt int64, labels map[string]string) error {
-	normalizedID := normalizeAPISIXID(id)
+	normalizedID := cert.NormalizeAPISIXID(id)
 	obj := ApisixSSLObject{
 		ID:     normalizedID,
 		SNIs:   snis,
@@ -217,7 +223,7 @@ func (c *ApisixClient) UpsertCertificate(id string, snis []string, certPEM, keyP
 		respBody.ReadFrom(resp.Body)
 		return fmt.Errorf("APISIX 上传证书失败，状态码=%d, 响应=%s", resp.StatusCode, respBody.String())
 	}
-	Log.Info("APISIX 证书上传成功", "id", normalizedID, "original_domain", id, "snis", snis)
+	logger.Log.Info("APISIX 证书上传成功", "id", normalizedID, "original_domain", id, "snis", snis)
 	return nil
 }
 
@@ -226,14 +232,11 @@ type ApisixRoute struct {
 	ID       string         `json:"id,omitempty"`
 	Name     string         `json:"name,omitempty"`
 	URI      string         `json:"uri,omitempty"`
-	URIs     []string       `json:"uris,omitempty"`
 	Methods  []string       `json:"methods,omitempty"`
 	Hosts    []string       `json:"hosts,omitempty"`
 	Priority int            `json:"priority,omitempty"`
 	Status   int            `json:"status,omitempty"`
 	Upstream ApisixUpstream `json:"upstream"`
-	Plugins  map[string]any `json:"plugins,omitempty"`
-	Vars     [][]string     `json:"vars,omitempty"`
 }
 
 // ApisixUpstream 上游对象
@@ -244,7 +247,7 @@ type ApisixUpstream struct {
 }
 
 // EnsureChallengeRoute 创建或更新验证路由
-func (c *ApisixClient) EnsureChallengeRoute(cfg *Config, domain string) (string, error) {
+func (c *ApisixClient) EnsureChallengeRoute(cfg *config.Config, domain string) (string, error) {
 	if !cfg.ChallengeRoute.Enable {
 		return "", nil
 	}
@@ -306,7 +309,7 @@ func (c *ApisixClient) EnsureChallengeRoute(cfg *Config, domain string) (string,
 	if resp.StatusCode >= 300 {
 		return "", fmt.Errorf("APISIX 创建验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Info("验证路由已创建", "id", routeID)
+	logger.Log.Info("验证路由已创建", "id", routeID)
 	return routeID, nil
 }
 
@@ -331,11 +334,10 @@ func (c *ApisixClient) DeleteChallengeRoute(routeID string) error {
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("APISIX 删除验证路由失败，状态码=%d", resp.StatusCode)
 	}
-	Log.Info("验证路由已删除", "id", routeID)
+	logger.Log.Info("验证路由已删除", "id", routeID)
 	return nil
 }
 
-// extractPort 提取端口号
 func extractPort(addr string) string {
 	if addr == "" {
 		return ""
@@ -353,16 +355,14 @@ func extractPort(addr string) string {
 	return ""
 }
 
-// resourceURL 构建资源 URL
 func (c *ApisixClient) resourceURL(resource, id string) string {
 	pathResource := resource
 	if resource == "ssl" {
-		pathResource = "ssls" // v3 API 使用 ssls
+		pathResource = "ssls"
 	}
 	builder := strings.Builder{}
 	builder.WriteString(c.baseURL)
-	builder.WriteString("/apisix/admin")
-	builder.WriteString("/")
+	builder.WriteString("/apisix/admin/")
 	builder.WriteString(pathResource)
 	if id != "" {
 		builder.WriteString("/")
