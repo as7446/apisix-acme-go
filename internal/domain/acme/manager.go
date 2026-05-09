@@ -82,26 +82,28 @@ type AcmeUser struct {
 
 func (u *AcmeUser) GetEmail() string                        { return u.Email }
 func (u *AcmeUser) GetRegistration() *registration.Resource { return u.Registration }
-func (u *AcmeUser) GetPrivateKey() crypto.PrivateKey         { return u.key }
+func (u *AcmeUser) GetPrivateKey() crypto.PrivateKey        { return u.key }
 
 // Manager ACME 管理器
 type Manager struct {
-	cfg        *config.Config
-	certRepo   cert.CertRepository
-	certCache  cert.CertCache
-	httpStore  *HTTPChallengeStore
-	apisix     *ApisixClient
-	clientInit func(email string) (*lego.Client, error)
+	cfg         *config.Config
+	certRepo    cert.CertRepository
+	accountRepo cert.AccountRepository
+	certCache   cert.CertCache
+	httpStore   *HTTPChallengeStore
+	apisix      *ApisixClient
+	clientInit  func(email string) (*lego.Client, error)
 }
 
 // NewManager 创建 ACME 管理器
-func NewManager(cfg *config.Config, certRepo cert.CertRepository, certCache cert.CertCache, httpStore *HTTPChallengeStore, apiClient *ApisixClient) *Manager {
+func NewManager(cfg *config.Config, certRepo cert.CertRepository, accountRepo cert.AccountRepository, certCache cert.CertCache, httpStore *HTTPChallengeStore, apiClient *ApisixClient) *Manager {
 	m := &Manager{
-		cfg:        cfg,
-		certRepo:   certRepo,
-		certCache:  certCache,
-		httpStore:  httpStore,
-		apisix:     apiClient,
+		cfg:         cfg,
+		certRepo:    certRepo,
+		accountRepo: accountRepo,
+		certCache:   certCache,
+		httpStore:   httpStore,
+		apisix:      apiClient,
 	}
 	m.clientInit = m.defaultClientInit
 	return m
@@ -111,24 +113,24 @@ func (m *Manager) defaultClientInit(email string) (*lego.Client, error) {
 	var privateKey crypto.PrivateKey
 	var reg *registration.Resource
 
-	account, err := m.certRepo.(interface {
-		GetAccount(email string) (*cert.AcmeAccount, error)
-	}).GetAccount(email)
-	if err == nil && account != nil {
-		logger.Log.Info("加载已有 ACME 账户", "email", email)
-		block, _ := pem.Decode(account.PrivateKey)
-		if block == nil {
-			return nil, fmt.Errorf("解析账户私钥失败")
-		}
-		privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("解析账户私钥失败：%w", err)
-		}
-		if len(account.Registration) > 0 {
-			reg = &registration.Resource{}
-			if err := json.Unmarshal(account.Registration, reg); err != nil {
-				logger.Log.Error("解析账户注册信息失败（将尝试重新注册）", "error", err)
-				reg = nil
+	if m.accountRepo != nil {
+		account, err := m.accountRepo.GetAccount(email)
+		if err == nil && account != nil {
+			logger.Log.Info("加载已有 ACME 账户", "email", email)
+			block, _ := pem.Decode(account.PrivateKey)
+			if block == nil {
+				return nil, fmt.Errorf("解析账户私钥失败")
+			}
+			privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
+			if err != nil {
+				return nil, fmt.Errorf("解析账户私钥失败：%w", err)
+			}
+			if len(account.Registration) > 0 {
+				reg = &registration.Resource{}
+				if err := json.Unmarshal(account.Registration, reg); err != nil {
+					logger.Log.Error("解析账户注册信息失败（将尝试重新注册）", "error", err)
+					reg = nil
+				}
 			}
 		}
 	}
@@ -190,7 +192,7 @@ func (m *Manager) defaultClientInit(email string) (*lego.Client, error) {
 				PrivateKey:   keyPEM,
 				Registration: regBytes,
 			}
-			if err := m.saveAccount(account); err != nil {
+			if err := m.accountRepo.SaveAccount(account); err != nil {
 				logger.Log.Error("保存 ACME 账户信息失败", "error", err)
 			} else {
 				logger.Log.Info("ACME 账户信息已保存", "email", email)
@@ -199,13 +201,6 @@ func (m *Manager) defaultClientInit(email string) (*lego.Client, error) {
 	}
 
 	return client, nil
-}
-
-func (m *Manager) saveAccount(account *cert.AcmeAccount) error {
-	if ac, ok := m.certRepo.(interface{ SaveAccount(*cert.AcmeAccount) error }); ok {
-		return ac.SaveAccount(account)
-	}
-	return nil
 }
 
 // CheckAPISIXCertificate 检查证书是否存在及过期时间

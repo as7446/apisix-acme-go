@@ -11,8 +11,9 @@ import (
 	"github.com/robfig/cron/v3"
 
 	"github.com/as7446/apisix-acme-go/internal/domain/acme"
-	"github.com/as7446/apisix-acme-go/internal/domain/task"
 	"github.com/as7446/apisix-acme-go/internal/domain/sync"
+	"github.com/as7446/apisix-acme-go/internal/domain/task"
+
 	"github.com/as7446/apisix-acme-go/internal/infra/config"
 	"github.com/as7446/apisix-acme-go/internal/infra/logger"
 	"github.com/as7446/apisix-acme-go/internal/store/cache"
@@ -46,6 +47,7 @@ func main() {
 	certRepo := storm.NewCertRepo(store)
 	taskRepo := storm.NewTaskRepo(store)
 	syncRepo := storm.NewSyncRepo(store)
+	accountRepo := storm.NewAccountRepo(store)
 
 	// 初始化 APISIX 客户端
 	apisixClient := acme.NewApisixClient(cfg)
@@ -58,7 +60,7 @@ func main() {
 	httpChallengeStore := acme.NewHTTPChallengeStore()
 
 	// 初始化 ACME Manager
-	acmeMgr := acme.NewManager(cfg, certRepo, certCache, httpChallengeStore, apisixClient)
+	acmeMgr := acme.NewManager(cfg, certRepo, accountRepo, certCache, httpChallengeStore, apisixClient)
 
 	// 初始化 Task Manager
 	taskMgr := task.NewManager(certRepo, taskRepo, acmeMgr, cfg)
@@ -153,4 +155,6 @@ func startAllCrons(cfg *config.Config, taskRepo task.TaskRepository, acmeMgr *ac
 
 	c.Start()
 	return c, nil
+
+
 }
