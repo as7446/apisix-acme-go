@@ -1,35 +1,204 @@
-BINARY ?= apisix-acme-go
-OUTPUT_DIR ?= bin
-MAIN_PKG ?= .
-IMAGE ?= apisix-acme-go:latest
-PLATFORMS ?= linux/amd64,linux/arm64
-GOOS ?= $(shell go env GOOS)
-GOARCH ?= $(shell go env GOARCH)
+# =============================================================================
+# apisix-acme-go Makefile
+# =============================================================================
 
-.PHONY: build build-amd64 build-arm64 clean docker-build docker-build-amd64 docker-build-arm64 docker-build-multi
+# 项目信息
+BINARY_NAME := apisix-acme-go
+MODULE      := github.com/as7446/apisix-acme-go
+VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME  := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
+BUILD_USER  := $(shell whoami)
+BUILD_HOST   = $(shell hostname -s 2>/dev/null || hostname)
 
-build:
+# 编译输出
+OUTPUT_DIR    := bin
+DIST_DIR     := dist
+
+# 镜像
+IMAGE_NAME   ?= $(BINARY_NAME)
+IMAGE_REGISTRY ?= docker.io
+IMAGE_TAG    ?= latest
+IMAGE_FULL   := $(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+
+# 多平台
+PLATFORMS    := linux/amd64,linux/arm64
+
+# Go 参数
+GO_CMD       := go
+GOOS         ?= $(shell $(GO_CMD) env GOOS)
+GOARCH       ?= $(shell $(GO_CMD) env GOARCH)
+CGO_ENABLED  := 0
+
+# ldflags
+LDFLAGS      := -s -w \
+	-X $(MODULE)/internal/infra/config.Version=$(VERSION) \
+	-X $(MODULE)/internal/infra/config.BuildTime=$(BUILD_TIME) \
+	-X $(MODULE)/internal/infra/config.BuildUser=$(BUILD_USER) \
+	-X $(MODULE)/internal/infra/config.BuildHost=$(BUILD_HOST)
+
+# 编译目标
+CONTROLLER_BIN := $(OUTPUT_DIR)/controller
+AGENT_BIN      := $(OUTPUT_DIR)/agent
+MIGRATE_BIN    := $(OUTPUT_DIR)/migrate
+MIGRATE_CERTS  := $(OUTPUT_DIR)/migrate-certs
+
+.PHONY: all build build-all build-controller build-agent build-migrate build-migrate-certs \
+	clean install install-cross docker-build docker-buildx docker-buildx-push \
+	fmt vet lint test test-cover mod-tidy mod-download help dist dist-all \
+	version help
+
+# -----------------------------------------------------------------------------
+# Default
+# -----------------------------------------------------------------------------
+all: mod-download build-all
+
+# -----------------------------------------------------------------------------
+# Build
+# -----------------------------------------------------------------------------
+build: build-controller
+
+build-all: build-controller build-agent build-migrate build-migrate-certs
+
+build-controller: $(CONTROLLER_BIN)
+
+build-agent: $(AGENT_BIN)
+
+build-migrate: $(MIGRATE_BIN)
+
+build-migrate-certs: $(MIGRATE_CERTS)
+
+$(CONTROLLER_BIN):
 	@mkdir -p $(OUTPUT_DIR)
-	CGO_ENABLED=0 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o $(OUTPUT_DIR)/$(BINARY)-$(GOOS)-$(GOARCH) $(MAIN_PKG)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $@ ./cmd/controller
 
+$(AGENT_BIN):
+	@mkdir -p $(OUTPUT_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $@ ./cmd/agent
+
+$(MIGRATE_BIN):
+	@mkdir -p $(OUTPUT_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $@ ./cmd/migrate
+
+$(MIGRATE_CERTS):
+	@mkdir -p $(OUTPUT_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $@ ./cmd/migrate-certs
+
+# 交叉编译 amd64
 build-amd64:
-	$(MAKE) build GOOS=linux GOARCH=amd64 CGO_ENABLED=0
+	@mkdir -p $(OUTPUT_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=amd64 $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/controller
 
+# 交叉编译 arm64
 build-arm64:
-	$(MAKE) build GOOS=linux GOARCH=arm64 CGO_ENABLED=0
+	@mkdir -p $(OUTPUT_DIR)
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=arm64 $(GO_CMD) build -ldflags "$(LDFLAGS)" \
+		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/controller
 
+# -----------------------------------------------------------------------------
+# Go 模块
+# -----------------------------------------------------------------------------
+mod-download:
+	$(GO_CMD) mod download
+
+mod-tidy:
+	$(GO_CMD) mod tidy
+	$(GO_CMD) mod verify
+
+# -----------------------------------------------------------------------------
+# 代码质量
+# -----------------------------------------------------------------------------
+fmt:
+	@echo "=== fmt ==="
+	$(GO_CMD) fmt ./...
+	gofmt -s -w .
+
+vet:
+	@echo "=== vet ==="
+	$(GO_CMD) vet -all ./...
+
+lint: vet
+	@echo "=== lint (staticcheck) ==="
+	@which staticcheck >/dev/null 2>&1 && staticcheck ./... || echo "staticcheck not installed, skip"
+
+# -----------------------------------------------------------------------------
+# Test
+# -----------------------------------------------------------------------------
+test:
+	$(GO_CMD) test -v -race -coverprofile=coverage.out ./...
+
+test-cover: test
+	$(GO_CMD) tool cover -html=coverage.out -o coverage.html
+
+# -----------------------------------------------------------------------------
+# Clean
+# -----------------------------------------------------------------------------
 clean:
-	rm -rf $(OUTPUT_DIR)
+	rm -rf $(OUTPUT_DIR) $(DIST_DIR) coverage.out coverage.html
 
+dist-clean:
+	rm -rf $(DIST_DIR)
+
+# -----------------------------------------------------------------------------
+# Install
+# -----------------------------------------------------------------------------
+install: build-all
+	@mkdir -p /usr/local/bin
+	cp $(CONTROLLER_BIN) /usr/local/bin/$(BINARY_NAME)
+	cp $(AGENT_BIN) /usr/local/bin/$(BINARY_NAME)-agent
+	cp $(MIGRATE_BIN) /usr/local/bin/$(BINARY_NAME)-migrate
+	cp $(MIGRATE_CERTS) /usr/local/bin/$(BINARY_NAME)-migrate-certs
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
 docker-build:
-	docker build -t $(IMAGE) .
+	docker build $(DOCKER_BUILD_ARGS) -t $(IMAGE_FULL) .
 
-docker-build-amd64:
-	docker buildx build --platform linux/amd64 -t $(IMAGE)-amd64 --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --load .
+docker-buildx:
+	docker buildx build \
+		--platform $(PLATFORMS) \
+		--progress=plain \
+		-t $(IMAGE_FULL) \
+		--load \
+		.
 
-docker-build-arm64:
-	docker buildx build --platform linux/arm64 -t $(IMAGE)-arm64 --build-arg TARGETOS=linux --build-arg TARGETARCH=arm64 --load .
+docker-buildx-push:
+	docker buildx build \
+		--platform $(PLATFORMS) \
+		--progress=plain \
+		-t $(IMAGE_FULL) \
+		--push \
+		.
 
-docker-build-multi:
-	docker buildx build --platform $(PLATFORMS) -t $(IMAGE) --push .
+# -----------------------------------------------------------------------------
+# Dist (goreleaser)
+# -----------------------------------------------------------------------------
+dist: mod-tidy
+	goreleaser build --snapshot --rm-dist --output $(DIST_DIR)
 
+dist-all: mod-tidy
+	goreleaser release --snapshot --rm-dist --output $(DIST_DIR)
+
+# -----------------------------------------------------------------------------
+# Version
+# -----------------------------------------------------------------------------
+version:
+	@echo "Version:    $(VERSION)"
+	@echo "BuildTime:  $(BUILD_TIME)"
+	@echo "BuildUser:  $(BUILD_USER)"
+	@echo "BuildHost:  $(BUILD_HOST)"
+	@echo "GoVersion:  $(shell $(GO_CMD) version)"
+	@echo "GOOS:       $(GOOS)"
+	@echo "GOARCH:     $(GOARCH)"
+
+# -----------------------------------------------------------------------------
+# Help
+# -----------------------------------------------------------------------------
+help:
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

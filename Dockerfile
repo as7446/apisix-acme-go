@@ -18,7 +18,9 @@ COPY . .
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ENV CGO_ENABLED=0
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/apisix-acme-go .
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/controller cmd/controller/main.go
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/agent cmd/agent/main.go
+
 
 FROM debian:12
 WORKDIR /app
@@ -39,5 +41,5 @@ COPY config.example.yml /app/config.example.yml
 ENV TZ=UTC
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/apisix-acme-go"]
+ENTRYPOINT ["/usr/local/bin/controller"]
 
