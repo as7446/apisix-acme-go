@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1.6
-
 ARG GO_VERSION=1.24
 
 FROM golang:${GO_VERSION} AS builder
