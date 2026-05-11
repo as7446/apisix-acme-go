@@ -35,7 +35,8 @@ RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
     && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /out/apisix-acme-go /usr/local/bin/apisix-acme-go
+COPY --from=builder /out/controller /usr/local/bin/controller
+COPY --from=builder /out/agent /usr/local/bin/agent
 COPY config.example.yml /app/config.example.yml
 
 ENV TZ=UTC
