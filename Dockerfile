@@ -19,7 +19,7 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ENV CGO_ENABLED=0
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/controller cmd/controller/main.go
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/agent cmd/*
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /out/agent cmd/agent/*
 
 
 FROM debian:12
