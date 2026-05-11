@@ -376,9 +376,9 @@ func (m *Manager) RequestCertificate(domain string, email string, force bool) (*
 	_ = m.certRepo.SetRenewing(domain, false, "")
 
 	apisixID := domain
-	revision := certificate.Revision
+	revision := certificate.CurrentRevision
 	if updated, ok := m.certRepo.Get(domain); ok {
-		revision = updated.Revision
+		revision = updated.CurrentRevision
 	}
 	labels := map[string]string{
 		"managed-by":      m.cfg.ManagedByLabel,
@@ -436,7 +436,7 @@ func (m *Manager) RenewAll() {
 					"not_after", time.Unix(cached.NotAfter, 0).Format("2006-01-02"))
 				labels := map[string]string{
 					"managed-by":      m.cfg.ManagedByLabel,
-					"x-acme-revision": fmt.Sprintf("%d", certificate.Revision),
+					"x-acme-revision": fmt.Sprintf("%d", certificate.CurrentRevision),
 				}
 				if err := m.apisix.UpsertCertificate(certificate.Domain, []string{certificate.Domain}, cached.CertPEM, cached.KeyPEM, cached.NotAfter, labels); err != nil {
 					logger.Log.Error("续期同步缓存证书到 APISIX 失败", "domain", certificate.Domain, "error", err)

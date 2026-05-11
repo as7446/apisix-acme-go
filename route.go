@@ -11,7 +11,6 @@ import (
 	"github.com/as7446/apisix-acme-go/internal/domain/task"
 	"github.com/as7446/apisix-acme-go/internal/infra/config"
 	"github.com/as7446/apisix-acme-go/internal/infra/logger"
-	"github.com/as7446/apisix-acme-go/internal/store/cache"
 )
 
 type CreateTaskRequest struct {
@@ -52,7 +51,7 @@ func authMiddleware(token string) gin.HandlerFunc {
 	}
 }
 
-func newRouter(cfg *config.Config, tm *task.Manager, certRepo cert.CertRepository, apiClient *acme.ApisixClient, cache *cache.FileCache, httpStore *acme.HTTPChallengeStore) *gin.Engine {
+func newRouter(cfg *config.Config, tm *task.Manager, certRepo cert.CertRepository, apiClient *acme.ApisixClient, cache cert.CertCache, httpStore *acme.HTTPChallengeStore) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(gin.Logger())

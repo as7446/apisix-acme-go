@@ -259,11 +259,11 @@ func (m *Manager) reconcileCert(localCert *cert.Certificate, managedSSLs map[str
 	apisixRevision := m.apisix.GetRevisionFromSSL(apisixSSL)
 
 	var resolveToLocal bool
-	if localCert.Revision != 0 && apisixRevision != 0 {
-		resolveToLocal = localCert.Revision > apisixRevision
+	if localCert.CurrentRevision != 0 && apisixRevision != 0 {
+		resolveToLocal = localCert.CurrentRevision > apisixRevision
 		logger.Log.Info("证书冲突：按 revision 决策",
 			"domain", domain,
-			"local_revision", localCert.Revision,
+			"local_revision", localCert.CurrentRevision,
 			"apisix_revision", apisixRevision,
 			"resolve_to_local", resolveToLocal)
 	} else {
@@ -291,7 +291,7 @@ func (m *Manager) reconcileCert(localCert *cert.Certificate, managedSSLs map[str
 
 	if SyncMode(m.cfg.SyncMode) == SyncModeStrict {
 		logger.Log.Warn("严格模式：APISIX 版本较新，记录冲突但不自动覆盖本地",
-			"domain", domain, "local_revision", localCert.Revision, "apisix_revision", apisixRevision)
+			"domain", domain, "local_revision", localCert.CurrentRevision, "apisix_revision", apisixRevision)
 		_ = m.certRepo.UpdateCertSyncState(domain, cert.CertStatusSyncFailed, "conflict: apisix is newer, strict mode skipped pull")
 		return "warned"
 	}
@@ -390,24 +390,24 @@ func (m *Manager) importFromAPISIX(domain string, apisixSSL *cert.ApisixSSLObjec
 
 	existingRevision := 0
 	if existing, ok := m.certRepo.GetByAPISIXID(apisixID); ok {
-		existingRevision = existing.Revision
+		existingRevision = existing.CurrentRevision
 	}
 
 	localCert := &cert.Certificate{
-		Domain:       domain,
-		SNIs:         apisixSSL.SNIs,
-		NotBefore:    certificate.NotBefore.Unix(),
-		NotAfter:     certificate.NotAfter.Unix(),
-		APISIXID:     apisixID,
-		Fingerprint:  fingerprint,
-		SerialNumber: serialNumber,
-		CreatedAt:    now,
-		UpdatedAt:    now,
-		Deleted:      false,
-		Status:       cert.CertStatusIssued,
-		Source:       source,
-		LastSyncedAt: now,
-		Revision:     existingRevision,
+		Domain:          domain,
+		SNIs:            apisixSSL.SNIs,
+		NotBefore:       certificate.NotBefore.Unix(),
+		NotAfter:        certificate.NotAfter.Unix(),
+		APISIXID:        apisixID,
+		Fingerprint:     fingerprint,
+		SerialNumber:    serialNumber,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Deleted:         false,
+		Status:          cert.CertStatusIssued,
+		Source:          source,
+		LastSyncedAt:    now,
+		CurrentRevision: existingRevision,
 	}
 
 	if err := m.certRepo.Upsert(localCert); err != nil {
@@ -435,11 +435,11 @@ func (m *Manager) pushToAPISIX(localCert *cert.Certificate) error {
 		return fmt.Errorf("文件缓存不存在（domain=%s），已标记 pending 等待 renew 任务重新签发", domain)
 	}
 
-	labels := m.buildManagedLabels(localCert.Revision)
+	labels := m.buildManagedLabels(localCert.CurrentRevision)
 	if err := m.apisix.UpsertCertificate(domain, snis, cached.CertPEM, cached.KeyPEM, cached.NotAfter, labels); err != nil {
 		return fmt.Errorf("上传证书到 APISIX 失败：%w", err)
 	}
 
-	logger.Log.Info("证书已推送到 APISIX", "domain", domain, "snis", snis, "revision", localCert.Revision)
+	logger.Log.Info("证书已推送到 APISIX", "domain", domain, "snis", snis, "revision", localCert.CurrentRevision)
 	return nil
 }

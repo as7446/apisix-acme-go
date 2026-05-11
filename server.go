@@ -52,8 +52,8 @@ func main() {
 	// 初始化 APISIX 客户端
 	apisixClient := acme.NewApisixClient(cfg)
 
-	// 初始化缓存
-	certCache := cache.New(cfg.StorageDir)
+	// 初始化缓存（使用 DBCache，优先从 DB 读，写时同时落 DB + 文件）
+	certCache := cache.NewDBCache(cfg.StorageDir, certRepo)
 	_ = certCache.Load()
 
 	// 初始化 HTTP Challenge Store

@@ -19,6 +19,118 @@ func NewCertRepo(db *gorm.DB) *CertRepo {
 	return &CertRepo{db: db}
 }
 
+// WriteCertContent 写入证书内容到版本表
+func (r *CertRepo) WriteCertContent(domain string, certPEM, keyPEM string) error {
+	// 查询证书
+	var model CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&model).Error
+	if err != nil {
+		return fmt.Errorf("查询证书失败：%w", err)
+	}
+
+	// 解析证书获取元数据
+	metadata, err := cert.ParseCertMetadata(certPEM)
+	if err != nil {
+		return fmt.Errorf("解析证书失败：%w", err)
+	}
+
+	now := TimeNow()
+	newRevision := model.CurrentRevision + 1
+
+	// 开启事务
+	tx := r.db.Begin()
+
+	// 创建版本记录
+	version := &cert.CertVersion{
+		CertID:        int(model.ID),
+		Revision:      int(newRevision),
+		CertPEM:       certPEM,
+		PrivateKeyPEM: keyPEM,
+		NotBefore:     metadata.NotBefore,
+		NotAfter:      metadata.NotAfter,
+		Fingerprint:   metadata.Fingerprint,
+		SerialNumber:  metadata.SerialNumber,
+		CreatedAt:     int64(now),
+	}
+
+	var versionModel VersionModel
+	versionModel.FromVersion(version)
+	if err := tx.Create(&versionModel).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("创建版本记录失败：%w", err)
+	}
+	version.ID = int(versionModel.ID)
+
+	// 更新证书元数据
+	updates := map[string]interface{}{
+		"current_revision": newRevision,
+		"not_before":       metadata.NotBefore,
+		"not_after":        metadata.NotAfter,
+		"fingerprint":      metadata.Fingerprint,
+		"serial_number":    metadata.SerialNumber,
+		"updated_at":       now,
+	}
+	if err := tx.Model(&CertModel{}).Where("id = ?", model.ID).Updates(updates).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("更新证书元数据失败：%w", err)
+	}
+
+	tx.Commit()
+	logger.Log.Info("证书内容已写入版本表", "domain", domain, "revision", newRevision)
+	return nil
+}
+
+// GetVersion 获取证书指定版本内容
+func (r *CertRepo) GetVersion(domain string, revision int) (*cert.CertVersion, bool) {
+	var certModel CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&certModel).Error
+	if err != nil {
+		return nil, false
+	}
+
+	var versionModel VersionModel
+	err = r.db.Where("cert_id = ? AND revision = ?", certModel.ID, revision).First(&versionModel).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, false
+		}
+		return nil, false
+	}
+	return versionModel.ToVersion(), true
+}
+
+// GetLatestVersion 获取证书最新版本
+func (r *CertRepo) GetLatestVersion(domain string) (*cert.CertVersion, bool) {
+	var certModel CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&certModel).Error
+	if err != nil {
+		return nil, false
+	}
+
+	var versionModel VersionModel
+	err = r.db.Where("cert_id = ?", certModel.ID).Order("revision DESC").First(&versionModel).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, false
+		}
+		return nil, false
+	}
+	return versionModel.ToVersion(), true
+}
+
+// HasVersionContent 检查证书是否有版本内容
+func (r *CertRepo) HasVersionContent(domain string) bool {
+	var certModel CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&certModel).Error
+	if err != nil {
+		return false
+	}
+
+	var count int64
+	r.db.Model(&VersionModel{}).Where("cert_id = ?", certModel.ID).Count(&count)
+	return count > 0
+}
+
 func (r *CertRepo) Get(domain string) (*cert.Certificate, bool) {
 	var model CertModel
 	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&model).Error
@@ -76,8 +188,8 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 		if c.Source == "" {
 			c.Source = cert.CertSource(existing.Source)
 		}
-		if c.Revision <= int(existing.Revision) {
-			c.Revision = int(existing.Revision) + 1
+		if c.CurrentRevision <= int(existing.CurrentRevision) {
+			c.CurrentRevision = int(existing.CurrentRevision) + 1
 		}
 	} else if err == gorm.ErrRecordNotFound {
 		// 不存在，创建
@@ -87,8 +199,8 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 		if c.Source == "" {
 			c.Source = cert.CertSourceManaged
 		}
-		if c.Revision == 0 {
-			c.Revision = 1
+		if c.CurrentRevision == 0 {
+			c.CurrentRevision = 1
 		}
 	} else {
 		return fmt.Errorf("查询证书失败：%w", err)
@@ -104,7 +216,7 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 	}
 
 	c.ID = int(model.ID)
-	logger.Log.Info("证书已保存", "domain", c.Domain, "revision", c.Revision)
+	logger.Log.Info("证书已保存", "domain", c.Domain, "revision", c.CurrentRevision)
 	return nil
 }
 

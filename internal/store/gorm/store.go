@@ -69,6 +69,7 @@ func (s *Store) autoMigrate() error {
 		&TaskModel{},
 		&AcmeAccountModel{},
 		&SyncStateModel{},
+		&VersionModel{},
 	)
 }
 

@@ -30,28 +30,43 @@ const (
 
 // Certificate 证书元数据
 type Certificate struct {
-	ID           int
-	Domain       string
-	SNIs         []string
-	NotBefore    int64
-	NotAfter     int64
-	APISIXID     string
-	Fingerprint  string
-	SerialNumber string
-	CreatedAt    int64
-	UpdatedAt    int64
-	LastRenewAt  int64
-	RenewLockAt  int64
-	Deleted      bool
-	DeletedAt    int64
-	Status       CertStatus
-	Source       CertSource
-	LastSyncedAt int64
-	SyncError    string
-	Revision     int
-	Renewing     bool
-	LastIssuedAt int64
-	AcmeOrderURL string
+	ID              int
+	Domain          string
+	SNIs            []string
+	NotBefore       int64
+	NotAfter        int64
+	APISIXID        string
+	Fingerprint     string
+	SerialNumber    string
+	CreatedAt       int64
+	UpdatedAt       int64
+	LastRenewAt     int64
+	RenewLockAt     int64
+	Deleted         bool
+	DeletedAt       int64
+	Status          CertStatus
+	Source          CertSource
+	LastSyncedAt    int64
+	SyncError       string
+	CurrentRevision int // 当前生效版本
+	Renewing        bool
+	LastIssuedAt    int64
+	AcmeOrderURL    string
+}
+
+// CertVersion 证书版本（存储 PEM/KEY）
+type CertVersion struct {
+	ID            int
+	CertID        int
+	Revision      int
+	CertPEM       string
+	PrivateKeyPEM string
+	NotBefore     int64
+	NotAfter      int64
+	Fingerprint   string
+	SerialNumber  string
+	AcmeOrderURL  string
+	CreatedAt     int64
 }
 
 // EffectiveStatus 兼容旧记录（Status 为空时按 Deleted 字段推断）
