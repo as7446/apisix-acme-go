@@ -35,6 +35,9 @@ type Config struct {
 	TaskCleanupCron  string `yaml:"task_cleanup_cron"`
 	TaskRetentionHrs int    `yaml:"task_retention_hours"`
 
+	// 数据库配置
+	DB DBConfig `yaml:"db"`
+
 	// Client/Server Config
 	HTTPTimeout        int `yaml:"http_timeout"`         // HTTP Client Timeout (seconds)
 	ServerReadTimeout  int `yaml:"server_read_timeout"`  // Server Read Timeout (seconds)
@@ -58,6 +61,15 @@ type Config struct {
 	ControllerURL string `yaml:"controller_url"`
 	AgentRegion   string `yaml:"agent_region"`
 	AgentPullCron string `yaml:"agent_pull_cron"`
+}
+
+// DBConfig 数据库配置
+type DBConfig struct {
+	Dsn             string `yaml:"dsn"`               // 数据源名称，如 user:password@tcp(host:port)/dbname?charset=utf8mb4
+	MaxOpenConns    int    `yaml:"max_open_conns"`    // 最大打开连接数（默认 100）
+	MaxIdleConns    int    `yaml:"max_idle_conns"`    // 最大空闲连接数（默认 10）
+	ConnMaxLifetime int    `yaml:"conn_max_lifetime"` // 连接最大存活时间（秒，默认 3600）
+	TablePrefix     string `yaml:"table_prefix"`      // 表名前缀（默认 cert_）
 }
 
 // ChallengeRouteConfig HTTP-01 验证路由配置
@@ -148,5 +160,18 @@ func (cfg *Config) applyDefaults() {
 	}
 	if cfg.AgentPullCron == "" {
 		cfg.AgentPullCron = "0 */30 * * * *"
+	}
+	// DB 默认值
+	if cfg.DB.MaxOpenConns <= 0 {
+		cfg.DB.MaxOpenConns = 100
+	}
+	if cfg.DB.MaxIdleConns <= 0 {
+		cfg.DB.MaxIdleConns = 10
+	}
+	if cfg.DB.ConnMaxLifetime <= 0 {
+		cfg.DB.ConnMaxLifetime = 3600
+	}
+	if cfg.DB.TablePrefix == "" {
+		cfg.DB.TablePrefix = "cert_"
 	}
 }

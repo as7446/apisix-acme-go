@@ -17,7 +17,7 @@ import (
 	"github.com/as7446/apisix-acme-go/internal/infra/config"
 	"github.com/as7446/apisix-acme-go/internal/infra/logger"
 	"github.com/as7446/apisix-acme-go/internal/store/cache"
-	"github.com/as7446/apisix-acme-go/internal/store/storm"
+	"github.com/as7446/apisix-acme-go/internal/store/gorm"
 )
 
 func main() {
@@ -36,18 +36,18 @@ func main() {
 		logger.Init(cfg.LogLevel)
 	}
 
-	// 初始化 Store
-	store, err := storm.New(cfg.StorageDir)
+	// 初始化数据库
+	store, err := gorm.New(cfg)
 	if err != nil {
-		logger.Log.Error("初始化存储失败", "error", err)
+		logger.Log.Error("初始化数据库失败", "error", err)
 		os.Exit(1)
 	}
 
 	// 初始化 Repository
-	certRepo := storm.NewCertRepo(store)
-	taskRepo := storm.NewTaskRepo(store)
-	syncRepo := storm.NewSyncRepo(store)
-	accountRepo := storm.NewAccountRepo(store)
+	certRepo := gorm.NewCertRepo(store.DB)
+	taskRepo := gorm.NewTaskRepo(store.DB)
+	syncRepo := gorm.NewSyncRepo(store.DB)
+	accountRepo := gorm.NewAccountRepo(store.DB)
 
 	// 初始化 APISIX 客户端
 	apisixClient := acme.NewApisixClient(cfg)
@@ -155,6 +155,4 @@ func startAllCrons(cfg *config.Config, taskRepo task.TaskRepository, acmeMgr *ac
 
 	c.Start()
 	return c, nil
-
-
 }
