@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"github.com/as7446/apisix-acme-go/internal/api/router"
+	"github.com/as7446/apisix-acme-go/internal/infra/apisix"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,14 +12,17 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"github.com/as7446/apisix-acme-go/internal/api"
+	"github.com/as7446/apisix-acme-go/internal/api/handler"
+	"github.com/as7446/apisix-acme-go/internal/application"
 	"github.com/as7446/apisix-acme-go/internal/domain/acme"
 	"github.com/as7446/apisix-acme-go/internal/domain/sync"
 	"github.com/as7446/apisix-acme-go/internal/domain/task"
+	"github.com/as7446/apisix-acme-go/internal/infra/cache"
+	"github.com/as7446/apisix-acme-go/internal/infra/logger"
 
 	"github.com/as7446/apisix-acme-go/internal/infra/config"
-	"github.com/as7446/apisix-acme-go/internal/infra/logger"
-	"github.com/as7446/apisix-acme-go/internal/store/cache"
-	"github.com/as7446/apisix-acme-go/internal/store/gorm"
+	"github.com/as7446/apisix-acme-go/internal/infra/gorm"
 )
 
 func main() {
@@ -48,11 +53,21 @@ func main() {
 	taskRepo := gorm.NewTaskRepo(store.DB)
 	syncRepo := gorm.NewSyncRepo(store.DB)
 	accountRepo := gorm.NewAccountRepo(store.DB)
+	agentRepo := gorm.NewAgentRepo(store.DB)
+
+	// 初始化 Agent 服务
+	agentSvc := application.NewAgentService(agentRepo)
+
+	// 启动离线检测器
+	offlineDetector := api.NewOfflineDetector(agentSvc)
+	detectorCtx, detectorCancel := context.WithCancel(context.Background())
+	go offlineDetector.Start(detectorCtx)
 
 	// 初始化 APISIX 客户端
 	apisixClient := acme.NewApisixClient(cfg)
+	apisixProvider := apisix.NewProvider(cfg)
 
-	// 初始化缓存（使用 DBCache，优先从 DB 读，写时同时落 DB + 文件）
+	// 初始化缓存
 	certCache := cache.NewDBCache(cfg.StorageDir, certRepo)
 	_ = certCache.Load()
 
@@ -68,6 +83,13 @@ func main() {
 	// 初始化 Sync Manager
 	syncMgr := sync.NewManager(cfg, certRepo, syncRepo, certCache, apisixClient)
 
+	// 初始化 Application Services
+	taskSvc := application.NewTaskService(taskMgr)
+	certSvc := application.NewCertService(certRepo, apisixProvider)
+
+	// 初始化 Handler 容器
+	h := handler.NewContainer(taskSvc, certSvc, agentSvc)
+
 	// 启动所有定时任务
 	cronScheduler, err := startAllCrons(cfg, taskRepo, acmeMgr, syncMgr)
 	if err != nil {
@@ -76,10 +98,16 @@ func main() {
 	}
 
 	// 创建 HTTP Server
-	router := newRouter(cfg, taskMgr, certRepo, apisixClient, certCache, httpChallengeStore)
+	deps := &router.Dependencies{
+		Config:    cfg,
+		H:         h,
+		HTTPStore: httpChallengeStore,
+	}
+	r := router.New(deps)
+
 	srv := &http.Server{
 		Addr:         cfg.Listen,
-		Handler:      router,
+		Handler:      r,
 		ReadTimeout:  time.Duration(cfg.ServerReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(cfg.ServerWriteTimeout) * time.Second,
 	}
@@ -102,6 +130,10 @@ func main() {
 	cronCtx := cronScheduler.Stop()
 	<-cronCtx.Done()
 	logger.Log.Info("定时任务已停止")
+
+	// 停止离线检测器
+	detectorCancel()
+	logger.Log.Info("离线检测器已停止")
 
 	// 关闭 HTTP Server
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

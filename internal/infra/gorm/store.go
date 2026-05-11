@@ -70,6 +70,7 @@ func (s *Store) autoMigrate() error {
 		&AcmeAccountModel{},
 		&SyncStateModel{},
 		&VersionModel{},
+		&AgentModel{},
 	)
 }
 

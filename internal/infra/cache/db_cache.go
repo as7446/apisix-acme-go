@@ -3,6 +3,7 @@ package cache
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"github.com/as7446/apisix-acme-go/internal/infra/logger"
 	"os"
 	"path/filepath"
 	"sync"
@@ -10,8 +11,7 @@ import (
 
 	"github.com/as7446/apisix-acme-go/internal/domain/cert"
 	"github.com/as7446/apisix-acme-go/internal/infra/config"
-	"github.com/as7446/apisix-acme-go/internal/infra/logger"
-	"github.com/as7446/apisix-acme-go/internal/store/gorm"
+	"github.com/as7446/apisix-acme-go/internal/infra/gorm"
 )
 
 // DBCache 基于数据库的证书缓存，优先从 DB 读，写时同时落 DB + 文件
