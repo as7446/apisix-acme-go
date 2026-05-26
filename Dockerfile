@@ -27,6 +27,13 @@ COPY --from=builder /out/certmanager /usr/local/bin/certmanager
 COPY config.controller.example.yml /app/config.controller.example.yml
 COPY config.agent.example.yml /app/config.agent.example.yml
 
+RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's|http://security.debian.org|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+
+RUN apt-get update && apt-get install -y ca-certificates \
+    && update-ca-certificates \
+
 ENV TZ=UTC
 
 EXPOSE 8080
