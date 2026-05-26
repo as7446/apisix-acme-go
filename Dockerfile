@@ -20,7 +20,7 @@ ENV CGO_ENABLED=0
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w -X github.com/as7446/apisix-acme-go/internal/infra/config.Version=${VERSION}" -o /out/certmanager ./cmd/certmanager
 
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM debian:13.5
 WORKDIR /app
 
 COPY --from=builder /out/certmanager /usr/local/bin/certmanager
