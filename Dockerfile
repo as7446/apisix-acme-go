@@ -27,7 +27,7 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     ./cmd/certmanager
 
 
-FROM debian:13.5
+FROM registry.cn-shanghai.aliyuncs.com/sh-cloud/debian:13.5
 WORKDIR /app
 
 ENV TZ=UTC
@@ -36,12 +36,6 @@ COPY --from=builder /out/certmanager /usr/local/bin/certmanager
 COPY config.controller.example.yml /app/config.controller.example.yml
 COPY config.agent.example.yml /app/config.agent.example.yml
 
-RUN sed -i 's|http://deb.debian.org|https://mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
-    && sed -i 's|http://security.debian.org|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates tzdata \
-    && update-ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8080
 
