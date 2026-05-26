@@ -1,150 +1,107 @@
 # apisix-acme-go
 
-Go 实现的 APISIX 证书自动申请与续期服务，参考了项目 [`TMaize/apisix-acme`](https://github.com/TMaize/apisix-acme)。
+APISIX 证书自动申请、续期与多 Agent 同步服务。
 
-## 功能特性
+## 架构
 
-- 自动申请证书（ACME，默认 Let's Encrypt）
-- 自动续期（定时扫描即将过期的证书）
-- 支持 HTTP-01 和 DNS-01 验证方式
-- 自动同步 APISIX 证书状态
+项目只保留两种运行角色，使用同一个二进制通过 `mode` 切换：
 
-## 快速开始
+- `controller`: 提供 API、执行 ACME 签发、调度 Agent 任务、做漂移检测。
+- `agent`: 注册到 Controller，长轮询任务，在本地 APISIX 执行 `inject_challenge`、`remove_challenge`、`sync_cert`、`delete_cert`。
 
-### 安装
-
-```bash
-git clone https://github.com/as7446/apisix-acme-go.git
-cd apisix-acme-go
-go build -o apisix-acme-go .
-```
-
-### 配置
-
-复制并编辑配置文件：
-
-```bash
-cp config.example.yml config.yml
-```
-
-必需配置项：
-
-```yaml
-apisix_admin_url: "http://127.0.0.1:9180"
-apisix_admin_token: "your-apisix-admin-token"
-default_email: "admin@example.com"
-bearer_token: "your-api-token"
-```
-
-### 启动
-
-```bash
-./apisix-acme-go
-```
-
-服务默认监听 `:8080`
-
-## 配置说明
-
-### HTTP-01 验证（推荐）
-
-自动创建验证路由：
-
-```yaml
-challenge_route:
-  enable: true
-  hosts: []  # 可选，为空则匹配所有 Host
-  upstream_nodes:
-    - "127.0.0.1:8080"  # 本服务地址
-  upstream_scheme: "http"
-  priority: 2000  # 建议设置较高优先级
-```
-
-### DNS-01 验证（通配符证书必需）
-
-```yaml
-acme_dns_provider: "cloudflare"  # 或 dnspod 等
-acme_dns_env:
-  CF_DNS_API_TOKEN: "your-token"
-  # 或使用 API Key + Email
-  # CF_API_EMAIL: "your-email"
-  # CF_API_KEY: "your-key"
-```
-
-支持的 DNS Provider 见 [lego 文档](https://go-acme.github.io/lego/dns/)
-
-### 其他配置
-
-```yaml
-renew_cron: "0 0 3 * * *"        # 续期检查时间（默认每天凌晨3点）
-renew_before_days: 30            # 到期前多少天续期
-sync_cron: "*/30 * * * * *"     # 同步 APISIX 证书状态
-sync_mode: "compat"              # strict: 清理多余证书 | compat: 导入缺失证书
-```
-
-## API 接口
-
-### 创建证书任务
-
-```bash
-curl -X POST "http://127.0.0.1:8080/apisix_acme/task_create" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
-  -d '{
-    "domain": "example.com",
-    "email": "admin@example.com",  # 可选，默认使用配置中的 default_email
-    "force": false                  # 可选，是否强制重新申请
-  }'
-```
-
-### 查询任务状态
-
-```bash
-curl "http://127.0.0.1:8080/apisix_acme/task_status?domain=example.com" \
-  -H "Authorization: Bearer your-token"
-```
-
-### 查询证书信息
-
-```bash
-curl "http://127.0.0.1:8080/apisix_acme/cert_info?domain=example.com" \
-  -H "Authorization: Bearer your-token"
-```
-
-### 删除证书
-
-```bash
-curl -X DELETE "http://127.0.0.1:8080/apisix_acme/cert_delete?domain=example.com" \
-  -H "Authorization: Bearer your-token"
-```
-
-## 通配符证书
-
-通配符证书（如 `*.example.com`）必须使用 DNS-01 验证：
-
-```bash
-curl -X POST "http://127.0.0.1:8080/apisix_acme/task_create" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer your-token" \
-  -d '{"domain": "*.example.com"}'
-```
+Controller 不再直接访问 APISIX Admin API。
 
 ## 构建
 
 ```bash
-# 本地构建
-go build -o apisix-acme-go .
-
-# Docker 多架构构建
-docker buildx build --platform linux/amd64,linux/arm64 -t apisix-acme-go:latest .
+go build -o certmanager ./cmd/certmanager
 ```
 
-## 参考
+## 配置
 
-- 项目：[TMaize/apisix-acme](https://github.com/TMaize/apisix-acme)
-- lego 文档：[go-acme.github.io/lego](https://go-acme.github.io/lego/)
-- APISIX 文档：[apisix.apache.org](https://apisix.apache.org/)
+Controller:
 
-## 许可证
+```bash
+cp config.controller.example.yml config.yml
+```
 
-MIT License
+Agent:
+
+```bash
+cp config.agent.example.yml config.yml
+```
+
+运行时默认读取当前目录的 `config.yml`，也可以通过 `CONFIG_PATH` 指定。
+
+## 启动
+
+Controller:
+
+```bash
+CONFIG_PATH=config.controller.example.yml ./certmanager
+```
+
+Agent:
+
+```bash
+CONFIG_PATH=config.agent.example.yml ./certmanager
+```
+
+## REST API
+
+创建证书：
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/certificates" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer changeme" \
+  -d '{"domain":"example.com","force":false,"challenge_zone":"hk","sync_zones":["hk"]}'
+```
+
+查询证书：
+
+```bash
+curl "http://127.0.0.1:8080/v1/certificates/example.com" \
+  -H "Authorization: Bearer changeme"
+```
+
+更新证书 Agent 路由策略：
+
+```bash
+curl -X PATCH "http://127.0.0.1:8080/v1/certificates/example.com/routing" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer changeme" \
+  -d '{"challenge_zone":"hk","sync_zones":["hk","sg"]}'
+```
+
+`challenge_zone` 影响下一次签发或续签时由哪个 Agent 建立 HTTP-01 challenge route；`sync_zones` 影响证书同步和漂移修复目标。`sync_zones` 为空数组时表示同步到所有在线 Agent。
+
+删除证书：
+
+```bash
+curl -X DELETE "http://127.0.0.1:8080/v1/certificates/example.com" \
+  -H "Authorization: Bearer changeme"
+```
+
+## 运维指标
+
+Controller 暴露标准 `expvar` 指标：
+
+```bash
+curl "http://127.0.0.1:8080/metrics"
+```
+
+建议至少对这些指标配置告警：
+
+- `agent_offline_total` 持续增加：有 Agent 心跳超时。
+- `cert_drift_repair_failure_total` 持续增加：证书自动恢复失败。
+- `cert_routing_prune_failure_total` 大于 0：zone 变更后旧 Agent 证书清理失败。
+- `cert_drift_detected_total` 长时间增长但 `cert_drift_repair_total` 不增长：同步链路卡住。
+
+## 数据库状态迁移
+
+证书状态主字段为 `lifecycle_status`、`issue_status`、`sync_status`。开发落地阶段已清理旧 `status`、`renewing`、`renew_lock_at`、`cert_tasks` 等历史结构。
+
+```bash
+mysql < migrations/001_clean_schema.sql
+```

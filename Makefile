@@ -37,13 +37,10 @@ LDFLAGS      := -s -w \
 	-X $(MODULE)/internal/infra/config.BuildHost=$(BUILD_HOST)
 
 # 编译目标
-CONTROLLER_BIN := $(OUTPUT_DIR)/controller
-AGENT_BIN      := $(OUTPUT_DIR)/agent
-MIGRATE_BIN    := $(OUTPUT_DIR)/migrate
-MIGRATE_CERTS  := $(OUTPUT_DIR)/migrate-certs
+CERTMANAGER_BIN := $(OUTPUT_DIR)/certmanager
 
-.PHONY: all build build-all build-controller build-agent build-migrate build-migrate-certs \
-	clean install install-cross docker-build docker-buildx docker-buildx-push \
+.PHONY: all build build-all build-certmanager \
+	clean install docker-build docker-buildx docker-buildx-push \
 	fmt vet lint test test-cover mod-tidy mod-download help dist dist-all \
 	version help
 
@@ -55,49 +52,28 @@ all: mod-download build-all
 # -----------------------------------------------------------------------------
 # Build
 # -----------------------------------------------------------------------------
-build: build-controller
+build: build-certmanager
 
-build-all: build-controller build-agent build-migrate build-migrate-certs
+build-all: build-certmanager
 
-build-controller: $(CONTROLLER_BIN)
+build-certmanager: $(CERTMANAGER_BIN)
 
-build-agent: $(AGENT_BIN)
-
-build-migrate: $(MIGRATE_BIN)
-
-build-migrate-certs: $(MIGRATE_CERTS)
-
-$(CONTROLLER_BIN):
+$(CERTMANAGER_BIN):
 	@mkdir -p $(OUTPUT_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $@ ./cmd/controller
-
-$(AGENT_BIN):
-	@mkdir -p $(OUTPUT_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $@ ./cmd/agent
-
-$(MIGRATE_BIN):
-	@mkdir -p $(OUTPUT_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $@ ./cmd/migrate
-
-$(MIGRATE_CERTS):
-	@mkdir -p $(OUTPUT_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $@ ./cmd/migrate-certs
+		-o $@ ./cmd/certmanager
 
 # 交叉编译 amd64
 build-amd64:
 	@mkdir -p $(OUTPUT_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=amd64 $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/controller
+		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-amd64 ./cmd/certmanager
 
 # 交叉编译 arm64
 build-arm64:
 	@mkdir -p $(OUTPUT_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=linux GOARCH=arm64 $(GO_CMD) build -ldflags "$(LDFLAGS)" \
-		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/controller
+		-o $(OUTPUT_DIR)/$(BINARY_NAME)-linux-arm64 ./cmd/certmanager
 
 # -----------------------------------------------------------------------------
 # Go 模块
@@ -148,10 +124,7 @@ dist-clean:
 # -----------------------------------------------------------------------------
 install: build-all
 	@mkdir -p /usr/local/bin
-	cp $(CONTROLLER_BIN) /usr/local/bin/$(BINARY_NAME)
-	cp $(AGENT_BIN) /usr/local/bin/$(BINARY_NAME)-agent
-	cp $(MIGRATE_BIN) /usr/local/bin/$(BINARY_NAME)-migrate
-	cp $(MIGRATE_CERTS) /usr/local/bin/$(BINARY_NAME)-migrate-certs
+	cp $(CERTMANAGER_BIN) /usr/local/bin/$(BINARY_NAME)
 
 # -----------------------------------------------------------------------------
 # Docker

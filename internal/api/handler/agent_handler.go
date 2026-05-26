@@ -46,7 +46,7 @@ func (h *AgentHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.svc.Heartbeat(req.AgentID)
+	resp, err := h.svc.Heartbeat(req.AgentID, req.SSLState)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "heartbeat failed"})
 		return

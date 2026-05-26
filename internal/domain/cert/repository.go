@@ -14,18 +14,30 @@ type CertRepository interface {
 	All() ([]*Certificate, error)
 	// FindNeedRenew 查找需要续期的证书
 	FindNeedRenew(renewBeforeDays int) ([]*Certificate, error)
-	// MarkDeleted 标记为删除中
+	// MarkDeleting 标记证书进入删除中
+	MarkDeleting(domain string) error
+	// MarkDeleted 标记证书删除完成
 	MarkDeleted(domain string) error
 	// RestoreDeleted 恢复已删除的证书
 	RestoreDeleted(domain string) error
-	// SetRenewing 设置证书续期中标志
-	SetRenewing(domain string, renewing bool, orderURL string) error
+	// ClaimIssue 原子领取一个待签发证书，成功后 issue_status=issuing
+	ClaimIssue(domain string) (bool, error)
+	// UpdateIssueStatus 更新签发状态
+	UpdateIssueStatus(domain string, status IssueStatus) error
 	// UpdateCertSyncState 更新同步状态
-	UpdateCertSyncState(domain string, status CertStatus, syncErr string) error
-	// LockRenew 锁定续期
-	LockRenew(domain string) (bool, error)
-	// UnlockRenew 解锁续期
-	UnlockRenew(domain string) error
+	UpdateCertSyncState(domain string, status SyncStatus, syncErr string) error
+	// UpdateRouting 更新证书的 Agent 路由策略
+	UpdateRouting(domain string, challengeZone string, syncZones []string) error
+	// FindByIssueStatus 查找指定签发状态的证书
+	FindByIssueStatus(statuses []IssueStatus) ([]*Certificate, error)
+	// FindBySyncStatus 查找指定同步状态的证书（且 issue_status=idle）
+	FindBySyncStatus(statuses []SyncStatus) ([]*Certificate, error)
+	// UpdateRetryState 更新重试状态
+	UpdateRetryState(domain string, retryCount int, nextRetryAt int64, issueStatus IssueStatus, errMsg string) error
+	// FindRetryReady 查找已到重试时间的 failed 证书
+	FindRetryReady(now int64) ([]*Certificate, error)
+	// FindRetryPending 查找所有处于重试等待中的 failed 证书（含未到期）
+	FindRetryPending() ([]*Certificate, error)
 	// Close 关闭存储连接
 	Close() error
 }
@@ -44,14 +56,6 @@ type CertCache interface {
 	GetKeyPath(domain string) string
 	// Load 加载缓存
 	Load() error
-}
-
-// SyncStateRepository 同步状态存储接口
-type SyncStateRepository interface {
-	// GetLastSyncTime 获取最后同步时间
-	GetLastSyncTime() (syncTime int64, firstSyncDone bool)
-	// SetLastSyncTime 设置最后同步时间
-	SetLastSyncTime(syncTime int64, firstSyncDone bool) error
 }
 
 // AcmeAccount ACME 账户信息

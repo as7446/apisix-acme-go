@@ -158,6 +158,34 @@ func (r *AgentRepo) ListOnline() ([]*agent.Agent, error) {
 	return result, nil
 }
 
+// ListOnlineByZone 获取指定 zone 的在线 Agent
+func (r *AgentRepo) ListOnlineByZone(zone string) ([]*agent.Agent, error) {
+	var models []AgentModel
+	err := r.db.Where("status = ? AND zone = ?", string(agent.AgentStatusOnline), zone).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*agent.Agent, 0, len(models))
+	for i := range models {
+		result = append(result, models[i].ToDomain())
+	}
+	return result, nil
+}
+
+// ListOnlineByZones 获取指定多个 zone 的在线 Agent
+func (r *AgentRepo) ListOnlineByZones(zones []string) ([]*agent.Agent, error) {
+	var models []AgentModel
+	err := r.db.Where("status = ? AND zone IN ?", string(agent.AgentStatusOnline), zones).Find(&models).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*agent.Agent, 0, len(models))
+	for i := range models {
+		result = append(result, models[i].ToDomain())
+	}
+	return result, nil
+}
+
 // Get 获取 Agent
 func (r *AgentRepo) Get(agentID string) (*agent.Agent, bool) {
 	var model AgentModel

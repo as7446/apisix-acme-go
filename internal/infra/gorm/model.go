@@ -4,15 +4,14 @@ import (
 	"time"
 
 	"github.com/as7446/apisix-acme-go/internal/domain/cert"
-	"github.com/as7446/apisix-acme-go/internal/domain/task"
 )
 
 // CertModel 证书元数据模型
 type CertModel struct {
 	ID              uint   `gorm:"primaryKey;autoIncrement" json:"id"`
 	Domain          string `gorm:"type:varchar(255);uniqueIndex;not null" json:"domain"`
-	SNIs            string `gorm:"type:text" json:"snis"` // JSON array: ["example.com"]
-	Status          string `gorm:"type:varchar(32);default:'';index" json:"status"`
+	LifecycleStatus string `gorm:"type:varchar(32);default:'active';index" json:"lifecycle_status"`
+	SyncStatus      string `gorm:"type:varchar(32);default:'unknown';index" json:"sync_status"`
 	CurrentRevision uint   `gorm:"type:int unsigned;default:1" json:"current_revision"` // 当前生效版本
 	NotBefore       uint64 `gorm:"type:bigint unsigned;default:0" json:"not_before"`
 	NotAfter        uint64 `gorm:"type:bigint unsigned;default:0;index" json:"not_after"`
@@ -22,15 +21,17 @@ type CertModel struct {
 	CreatedAt       uint64 `gorm:"type:bigint unsigned;default:0" json:"created_at"`
 	UpdatedAt       uint64 `gorm:"type:bigint unsigned;default:0;index" json:"updated_at"`
 	LastRenewAt     uint64 `gorm:"type:bigint unsigned;default:0" json:"last_renew_at"`
-	RenewLockAt     uint64 `gorm:"type:bigint unsigned;default:0" json:"renew_lock_at"`
 	Deleted         bool   `gorm:"type:tinyint(1);default:0;index" json:"deleted"`
 	DeletedAt       uint64 `gorm:"type:bigint unsigned;default:0" json:"deleted_at"`
 	Source          string `gorm:"type:varchar(32);default:'';index" json:"source"`
 	LastSyncedAt    uint64 `gorm:"type:bigint unsigned;default:0" json:"last_synced_at"`
 	SyncError       string `gorm:"type:text" json:"sync_error"`
-	Renewing        bool   `gorm:"type:tinyint(1);default:0;index" json:"renewing"`
+	IssueStatus     string `gorm:"type:varchar(32);default:'idle';index" json:"issue_status"` // idle/pending/issuing/failed
 	LastIssuedAt    uint64 `gorm:"type:bigint unsigned;default:0" json:"last_issued_at"`
-	AcmeOrderURL    string `gorm:"type:text" json:"acme_order_url"`
+	ChallengeZone   string `gorm:"type:varchar(64);default:'';index" json:"challenge_zone"` // HTTP-01 challenge zone
+	SyncZones       string `gorm:"type:text" json:"sync_zones"`                             // JSON array: ["hk","us"]
+	RetryCount      int    `gorm:"type:int;default:0" json:"retry_count"`
+	NextRetryAt     int64  `gorm:"type:bigint;default:0;index" json:"next_retry_at"`
 }
 
 func (CertModel) TableName() string {
@@ -39,15 +40,25 @@ func (CertModel) TableName() string {
 
 // ToDomain 转换为领域模型
 func (m *CertModel) ToDomain() *cert.Certificate {
-	var snis []string
-	if m.SNIs != "" {
-		parseJSONArray(m.SNIs, &snis)
+	issueStatus := cert.IssueStatus(m.IssueStatus)
+	if issueStatus == "" {
+		issueStatus = cert.IssueIdle
 	}
-
+	lifecycleStatus := cert.LifecycleStatus(m.LifecycleStatus)
+	if lifecycleStatus == "" {
+		lifecycleStatus = cert.LifecycleActive
+	}
+	syncStatus := cert.SyncStatus(m.SyncStatus)
+	if syncStatus == "" {
+		syncStatus = cert.SyncUnknown
+	}
+	var syncZones []string
+	if m.SyncZones != "" && m.SyncZones != "[]" {
+		parseJSONArray(m.SyncZones, &syncZones)
+	}
 	return &cert.Certificate{
 		ID:              int(m.ID),
 		Domain:          m.Domain,
-		SNIs:            snis,
 		NotBefore:       int64(m.NotBefore),
 		NotAfter:        int64(m.NotAfter),
 		APISIXID:        m.APISIXID,
@@ -56,17 +67,18 @@ func (m *CertModel) ToDomain() *cert.Certificate {
 		CreatedAt:       int64(m.CreatedAt),
 		UpdatedAt:       int64(m.UpdatedAt),
 		LastRenewAt:     int64(m.LastRenewAt),
-		RenewLockAt:     int64(m.RenewLockAt),
 		Deleted:         m.Deleted,
-		DeletedAt:       int64(m.DeletedAt),
-		Status:          cert.CertStatus(m.Status),
 		Source:          cert.CertSource(m.Source),
 		LastSyncedAt:    int64(m.LastSyncedAt),
-		SyncError:       m.SyncError,
-		CurrentRevision: int(m.CurrentRevision),
-		Renewing:        m.Renewing,
+		Revision:        int64(m.CurrentRevision),
 		LastIssuedAt:    int64(m.LastIssuedAt),
-		AcmeOrderURL:    m.AcmeOrderURL,
+		LifecycleStatus: lifecycleStatus,
+		IssueStatus:     issueStatus,
+		SyncStatus:      syncStatus,
+		ChallengeZone:   m.ChallengeZone,
+		SyncZones:       syncZones,
+		RetryCount:      m.RetryCount,
+		NextRetryAt:     m.NextRetryAt,
 	}
 }
 
@@ -82,54 +94,27 @@ func (m *CertModel) FromDomain(c *cert.Certificate) {
 	m.CreatedAt = uint64(c.CreatedAt)
 	m.UpdatedAt = uint64(c.UpdatedAt)
 	m.LastRenewAt = uint64(c.LastRenewAt)
-	m.RenewLockAt = uint64(c.RenewLockAt)
 	m.Deleted = c.Deleted
-	m.DeletedAt = uint64(c.DeletedAt)
-	m.Status = string(c.Status)
 	m.Source = string(c.Source)
 	m.LastSyncedAt = uint64(c.LastSyncedAt)
-	m.SyncError = c.SyncError
-	m.CurrentRevision = uint(c.CurrentRevision)
-	m.Renewing = c.Renewing
+	m.CurrentRevision = uint(c.Revision)
 	m.LastIssuedAt = uint64(c.LastIssuedAt)
-	m.AcmeOrderURL = c.AcmeOrderURL
-	if len(c.SNIs) > 0 {
-		m.SNIs = toJSONArray(c.SNIs)
+	if c.LifecycleStatus == "" {
+		c.LifecycleStatus = cert.LifecycleActive
 	}
-}
-
-// TaskModel 任务记录模型
-type TaskModel struct {
-	ID        uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	Domain    string `gorm:"type:varchar(255);index" json:"domain"`
-	Status    string `gorm:"type:varchar(32);default:'';index" json:"status"`
-	Error     string `gorm:"type:text" json:"error"`
-	CreatedAt uint64 `gorm:"type:bigint unsigned;default:0" json:"created_at"`
-	UpdatedAt uint64 `gorm:"type:bigint unsigned;default:0;index" json:"updated_at"`
-}
-
-func (TaskModel) TableName() string {
-	return "cert_tasks"
-}
-
-func (m *TaskModel) ToDomain() *task.TaskRecord {
-	return &task.TaskRecord{
-		ID:        int(m.ID),
-		Domain:    m.Domain,
-		Status:    m.Status,
-		Error:     m.Error,
-		CreatedAt: int64(m.CreatedAt),
-		UpdatedAt: int64(m.UpdatedAt),
+	if c.IssueStatus == "" {
+		c.IssueStatus = cert.IssueIdle
 	}
-}
-
-func (m *TaskModel) FromDomain(t *task.TaskRecord) {
-	m.ID = uint(t.ID)
-	m.Domain = t.Domain
-	m.Status = t.Status
-	m.Error = t.Error
-	m.CreatedAt = uint64(t.CreatedAt)
-	m.UpdatedAt = uint64(t.UpdatedAt)
+	if c.SyncStatus == "" {
+		c.SyncStatus = cert.SyncUnknown
+	}
+	m.LifecycleStatus = string(c.LifecycleStatus)
+	m.SyncStatus = string(c.SyncStatus)
+	m.IssueStatus = string(c.IssueStatus)
+	m.ChallengeZone = c.ChallengeZone
+	m.SyncZones = toJSONArray(c.SyncZones)
+	m.RetryCount = c.RetryCount
+	m.NextRetryAt = c.NextRetryAt
 }
 
 // AcmeAccountModel ACME 账户模型
@@ -158,17 +143,6 @@ func (m *AcmeAccountModel) FromDomain(a *cert.AcmeAccount) {
 	m.PrivateKey = a.PrivateKey
 	m.Registration = a.Registration
 	m.CreatedAt = uint64(a.CreatedAt)
-}
-
-// SyncStateModel 同步状态模型
-type SyncStateModel struct {
-	ID            uint   `gorm:"primaryKey;autoIncrement" json:"id"`
-	LastSyncTime  uint64 `gorm:"type:bigint unsigned;default:0" json:"last_sync_time"`
-	FirstSyncDone bool   `gorm:"type:tinyint(1);default:0" json:"first_sync_done"`
-}
-
-func (SyncStateModel) TableName() string {
-	return "cert_sync_states"
 }
 
 // 辅助函数：解析简单 JSON 数组
@@ -248,7 +222,6 @@ type VersionModel struct {
 	NotAfter      uint64 `gorm:"type:bigint unsigned;default:0" json:"not_after"`
 	Fingerprint   string `gorm:"type:varchar(255);default:''" json:"fingerprint"`
 	SerialNumber  string `gorm:"type:varchar(255);default:''" json:"serial_number"`
-	AcmeOrderURL  string `gorm:"type:text" json:"acme_order_url"`
 	CreatedAt     uint64 `gorm:"type:bigint unsigned;default:0" json:"created_at"`
 }
 
@@ -259,17 +232,14 @@ func (VersionModel) TableName() string {
 // ToVersion 转换为领域模型
 func (m *VersionModel) ToVersion() *cert.CertVersion {
 	return &cert.CertVersion{
-		ID:            int(m.ID),
-		CertID:        int(m.CertID),
-		Revision:      int(m.Revision),
-		CertPEM:       string(m.CertPEM),
-		PrivateKeyPEM: string(m.PrivateKeyPEM),
-		NotBefore:     int64(m.NotBefore),
-		NotAfter:      int64(m.NotAfter),
-		Fingerprint:   m.Fingerprint,
-		SerialNumber:  m.SerialNumber,
-		AcmeOrderURL:  m.AcmeOrderURL,
-		CreatedAt:     int64(m.CreatedAt),
+		ID:           int(m.ID),
+		CertID:       int(m.CertID),
+		Revision:     int64(m.Revision),
+		NotBefore:    int64(m.NotBefore),
+		NotAfter:     int64(m.NotAfter),
+		Fingerprint:  m.Fingerprint,
+		SerialNumber: m.SerialNumber,
+		CreatedAt:    int64(m.CreatedAt),
 	}
 }
 
@@ -278,12 +248,9 @@ func (m *VersionModel) FromVersion(v *cert.CertVersion) {
 	m.ID = uint(v.ID)
 	m.CertID = uint(v.CertID)
 	m.Revision = uint(v.Revision)
-	m.CertPEM = []byte(v.CertPEM)
-	m.PrivateKeyPEM = []byte(v.PrivateKeyPEM)
 	m.NotBefore = uint64(v.NotBefore)
 	m.NotAfter = uint64(v.NotAfter)
 	m.Fingerprint = v.Fingerprint
 	m.SerialNumber = v.SerialNumber
-	m.AcmeOrderURL = v.AcmeOrderURL
 	m.CreatedAt = uint64(v.CreatedAt)
 }

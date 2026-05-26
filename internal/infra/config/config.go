@@ -25,18 +25,17 @@ type Config struct {
 	ApisixAdminURL   string `yaml:"apisix_admin_url"`
 	ApisixAdminToken string `yaml:"apisix_admin_token"`
 	DefaultEmail     string `yaml:"default_email"`
-	StorageDir       string `yaml:"storage_dir"`
-	RenewCron        string `yaml:"renew_cron"`
-	RenewBeforeDays  int    `yaml:"renew_before_days"`
-	SyncCron         string `yaml:"sync_cron"`
-	SyncMode         string `yaml:"sync_mode"`
-	ManagedByLabel   string `yaml:"managed_by_label"` // Label value written to APISIX SSL resources to identify managed certs
-	SNIPattern       string `yaml:"sni_pattern"`      // Glob pattern for importing unmanaged certs during first sync
-	TaskCleanupCron  string `yaml:"task_cleanup_cron"`
-	TaskRetentionHrs int    `yaml:"task_retention_hours"`
+
+	RenewCron       string `yaml:"renew_cron"`
+	RenewBeforeDays int    `yaml:"renew_before_days"`
+	DriftCron       string `yaml:"drift_cron"`
+	ManagedByLabel  string `yaml:"managed_by_label"` // Label value written to APISIX SSL resources to identify managed certs
 
 	// 数据库配置
 	DB DBConfig `yaml:"db"`
+
+	// 存储配置
+	Storage StorageConfig `yaml:"storage"`
 
 	// Client/Server Config
 	HTTPTimeout        int `yaml:"http_timeout"`         // HTTP Client Timeout (seconds)
@@ -50,17 +49,36 @@ type Config struct {
 	// ChallengeRoute HTTP-01 验证路由配置
 	ChallengeRoute ChallengeRouteConfig `yaml:"challenge_route"`
 
+	// Worker Pool 配置
+	IssueWorkers         int    `yaml:"issue_workers"`          // 签发 worker 数（默认 3）
+	QueueCapacity        int    `yaml:"queue_capacity"`         // 队列容量（默认 1000）
+	QueueType            string `yaml:"queue_type"`             // 队列类型: memory（默认）| redis
+	WorkerDequeueTimeout int    `yaml:"worker_dequeue_timeout"` // worker 出队超时秒数（默认 5）
+	RecoveryCron         string `yaml:"recovery_cron"`          // 恢复扫描 cron（默认 "0 */5 * * * *"）
+
+	// Redis 配置（queue_type=redis 时生效）
+	Redis RedisConfig `yaml:"redis"`
+
 	// 证书申请重试配置
-	CertRetryMax   int `yaml:"cert_retry_max"`   // 证书申请最大重试次数（默认 3）
-	CertRetryDelay int `yaml:"cert_retry_delay"` // 首次重试延迟秒数（默认 2，后续指数增长）
+	CertRetryMax      int `yaml:"cert_retry_max"`      // 证书申请最大重试次数（默认 3）
+	CertRetryDelay    int `yaml:"cert_retry_delay"`    // 首次重试延迟秒数（默认 60，后续指数增长）
+	CertCooldownHours int `yaml:"cert_cooldown_hours"` // 达到最大重试后冷却时间（小时，默认 24）
 
 	// 日志级别（debug / info / warn / error）
 	LogLevel string `yaml:"log_level"`
 
-	// Agent 模式配置（预留）
+	// Agent 长轮询超时秒数（默认 30）
+	LongPollTimeout int `yaml:"long_poll_timeout"`
+	// Agent 任务超时秒数（默认 300）
+	AgentTaskTimeout int `yaml:"agent_task_timeout"`
+
+	// Agent 模式配置
 	ControllerURL string `yaml:"controller_url"`
+	AgentID       string `yaml:"agent_id"` // Agent 唯一标识，留空则使用 hostname
 	AgentRegion   string `yaml:"agent_region"`
-	AgentPullCron string `yaml:"agent_pull_cron"`
+
+	// 访问日志跳过路径前缀列表（匹配的路径不记录访问日志）
+	AccessLogSkipPrefixes []string `yaml:"access_log_skip_prefixes"`
 }
 
 // DBConfig 数据库配置
@@ -80,6 +98,25 @@ type ChallengeRouteConfig struct {
 	UpstreamNodes  []string `yaml:"upstream_nodes"`
 	UpstreamScheme string   `yaml:"upstream_scheme"`
 	Priority       int      `yaml:"priority"`
+}
+
+// StorageConfig 存储配置
+type StorageConfig struct {
+	Local struct {
+		BasePath string `yaml:"base_path"` // 基础路径，默认为 "certs"
+	} `yaml:"local"`
+}
+
+// RedisConfig Redis 连接配置
+type RedisConfig struct {
+	Addr         string `yaml:"addr"`          // 地址，如 "127.0.0.1:6379"
+	Password     string `yaml:"password"`      // 密码（空=无认证）
+	DB           int    `yaml:"db"`            // DB 编号（默认 0）
+	KeyPrefix    string `yaml:"key_prefix"`    // key 前缀（默认 "acme:queue"）
+	PoolSize     int    `yaml:"pool_size"`     // 连接池大小（默认 10）
+	DialTimeout  int    `yaml:"dial_timeout"`  // 连接超时秒数（默认 5）
+	ReadTimeout  int    `yaml:"read_timeout"`  // 读超时秒数（默认 3）
+	WriteTimeout int    `yaml:"write_timeout"` // 写超时秒数（默认 3）
 }
 
 // IsController 当前是否为 Controller 模式
@@ -110,26 +147,17 @@ func (cfg *Config) applyDefaults() {
 	if cfg.Listen == "" {
 		cfg.Listen = ":8080"
 	}
-	if cfg.StorageDir == "" {
-		cfg.StorageDir = "out"
+	if cfg.Storage.Local.BasePath == "" {
+		cfg.Storage.Local.BasePath = "certs"
 	}
 	if cfg.RenewBeforeDays <= 0 {
 		cfg.RenewBeforeDays = 30
 	}
-	if cfg.TaskRetentionHrs <= 0 {
-		cfg.TaskRetentionHrs = 24 * 7
-	}
 	if cfg.RenewCron == "" {
 		cfg.RenewCron = "0 0 2 * * *"
 	}
-	if cfg.TaskCleanupCron == "" {
-		cfg.TaskCleanupCron = "0 0 1 * * *"
-	}
-	if cfg.SyncCron == "" {
-		cfg.SyncCron = "0 0 * * * *"
-	}
-	if cfg.SyncMode == "" {
-		cfg.SyncMode = "compat"
+	if cfg.DriftCron == "" {
+		cfg.DriftCron = "0 0 * * * *"
 	}
 	if cfg.ManagedByLabel == "" {
 		cfg.ManagedByLabel = "apisix-acme-go"
@@ -152,14 +180,67 @@ func (cfg *Config) applyDefaults() {
 	if cfg.ServerWriteTimeout <= 0 {
 		cfg.ServerWriteTimeout = 30
 	}
+	if cfg.IssueWorkers <= 0 {
+		cfg.IssueWorkers = 3
+	}
+	if cfg.QueueCapacity <= 0 {
+		cfg.QueueCapacity = 1000
+	}
+	if cfg.WorkerDequeueTimeout <= 0 {
+		cfg.WorkerDequeueTimeout = 5
+	}
+	if cfg.RecoveryCron == "" {
+		cfg.RecoveryCron = "0 */5 * * * *"
+	}
 	if cfg.CertRetryMax <= 0 {
 		cfg.CertRetryMax = 3
 	}
 	if cfg.CertRetryDelay <= 0 {
-		cfg.CertRetryDelay = 2
+		cfg.CertRetryDelay = 60
 	}
-	if cfg.AgentPullCron == "" {
-		cfg.AgentPullCron = "0 */30 * * * *"
+	if cfg.CertCooldownHours <= 0 {
+		cfg.CertCooldownHours = 24
+	}
+	if cfg.LongPollTimeout <= 0 {
+		cfg.LongPollTimeout = 30
+	}
+	// 确保 WriteTimeout > LongPollTimeout，否则长轮询期间服务端会超时断开连接导致 Agent EOF
+	if cfg.ServerWriteTimeout <= cfg.LongPollTimeout {
+		cfg.ServerWriteTimeout = cfg.LongPollTimeout + 10
+	}
+	if cfg.AgentTaskTimeout <= 0 {
+		cfg.AgentTaskTimeout = 300
+	}
+	// 访问日志默认跳过高频 Agent 接口（除注册外）
+	// 规则：以 * 结尾表示前缀匹配，否则精确匹配
+	if len(cfg.AccessLogSkipPrefixes) == 0 {
+		cfg.AccessLogSkipPrefixes = []string{
+			"/v1/agents/heartbeat",
+			"/v1/agents/task_report",
+			"/v1/agents/VM*",
+			"/v1/agents/agent*",
+			"/healthz",
+		}
+	}
+	// Queue 默认值
+	if cfg.QueueType == "" {
+		cfg.QueueType = "memory"
+	}
+	// Redis 默认值
+	if cfg.Redis.KeyPrefix == "" {
+		cfg.Redis.KeyPrefix = "acme:queue"
+	}
+	if cfg.Redis.PoolSize <= 0 {
+		cfg.Redis.PoolSize = 10
+	}
+	if cfg.Redis.DialTimeout <= 0 {
+		cfg.Redis.DialTimeout = 5
+	}
+	if cfg.Redis.ReadTimeout <= 0 {
+		cfg.Redis.ReadTimeout = 3
+	}
+	if cfg.Redis.WriteTimeout <= 0 {
+		cfg.Redis.WriteTimeout = 3
 	}
 	// DB 默认值
 	if cfg.DB.MaxOpenConns <= 0 {

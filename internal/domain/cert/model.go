@@ -9,15 +9,48 @@ import (
 	"strings"
 )
 
-// CertStatus 证书同步状态枚举
-type CertStatus string
+/*
+	LifecycleStatus：这个证书资源还管不管。
+	IssueStatus：证书有没有在签发，以及签发到哪一步。
+	SyncStatus：证书有没有同步到目标网关，以及是否一致。
+*/
+// LifecycleStatus - 证书生命周期状态
+type LifecycleStatus string
 
 const (
-	CertStatusPending    CertStatus = "pending"
-	CertStatusIssued     CertStatus = "issued"
-	CertStatusRenewing   CertStatus = "renewing"
-	CertStatusSyncFailed CertStatus = "sync_failed"
-	CertStatusDeleting   CertStatus = "deleting"
+	LifecycleActive   LifecycleStatus = "active"
+	LifecycleExpired  LifecycleStatus = "expired"
+	LifecycleRevoked  LifecycleStatus = "revoked"
+	LifecycleDeleting LifecycleStatus = "deleting"
+	LifecycleDeleted  LifecycleStatus = "deleted"
+)
+
+// IssueStatus - 签发任务状态
+type IssueStatus string
+
+const (
+	IssueIdle    IssueStatus = "idle"
+	IssuePending IssueStatus = "pending"
+	IssueIssuing IssueStatus = "issuing"
+	IssueFailed  IssueStatus = "failed"
+
+	// Controller+Agent FSM 扩展状态
+	IssueChallengeInjecting IssueStatus = "challenge_injecting" // 等待 Agent 注入验证路由
+	IssueChallengeReady     IssueStatus = "challenge_ready"     // Agent 已注入验证路由
+	IssueAcmeVerifying      IssueStatus = "acme_verifying"      // ACME 验证+获取证书中
+	IssueIssued             IssueStatus = "issued"              // 证书已获取，待同步
+	IssueSyncDispatched     IssueStatus = "sync_dispatched"     // 同步任务已派发给 Agent
+)
+
+// SyncStatus - APISIX 同步状态
+type SyncStatus string
+
+const (
+	SyncUnknown SyncStatus = "unknown"
+	SyncDrifted SyncStatus = "drifted"
+	SyncSyncing SyncStatus = "syncing"
+	SyncSynced  SyncStatus = "synced"
+	SyncFailed  SyncStatus = "failed"
 )
 
 // CertSource 证书来源
@@ -32,52 +65,51 @@ const (
 type Certificate struct {
 	ID              int
 	Domain          string
-	SNIs            []string
+	APISIXID        string
+	Revision        int64      // 真正递增的版本号
+	Source          CertSource // managed / external
+	LifecycleStatus LifecycleStatus
+	IssueStatus     IssueStatus
+	SyncStatus      SyncStatus
+	Fingerprint     string // 从 storage cert 计算
+	SerialNumber    string
 	NotBefore       int64
 	NotAfter        int64
-	APISIXID        string
-	Fingerprint     string
-	SerialNumber    string
+	LastIssuedAt    int64
+	LastRenewAt     int64
+	LastSyncedAt    int64
 	CreatedAt       int64
 	UpdatedAt       int64
-	LastRenewAt     int64
-	RenewLockAt     int64
-	Deleted         bool
-	DeletedAt       int64
-	Status          CertStatus
-	Source          CertSource
-	LastSyncedAt    int64
-	SyncError       string
-	CurrentRevision int // 当前生效版本
-	Renewing        bool
-	LastIssuedAt    int64
-	AcmeOrderURL    string
+	ErrorMessage    string
+	// 删除标记
+	Deleted bool
+	// 重试控制
+	RetryCount  int   // 当前重试次数（达到 max 后进入冷却期并重置为 0）
+	NextRetryAt int64 // 下次可重试时间 (unix timestamp, 0=可立即重试)
+	// 多 Zone 支持
+	ChallengeZone string   // HTTP-01 验证由哪个 zone 的 Agent 处理
+	SyncZones     []string // 需要同步的 zone 列表（空=所有在线 Agent）
 }
 
-// CertVersion 证书版本（存储 PEM/KEY）
+// CertVersion 证书版本（不再存储 PEM/KEY，PEM 存于 CertStorage）
 type CertVersion struct {
-	ID            int
-	CertID        int
-	Revision      int
-	CertPEM       string
-	PrivateKeyPEM string
-	NotBefore     int64
-	NotAfter      int64
-	Fingerprint   string
-	SerialNumber  string
-	AcmeOrderURL  string
-	CreatedAt     int64
+	ID           int
+	CertID       int
+	Revision     int64
+	Fingerprint  string
+	SerialNumber string
+	NotBefore    int64
+	NotAfter     int64
+	CreatedAt    int64
 }
 
-// EffectiveStatus 兼容旧记录（Status 为空时按 Deleted 字段推断）
-func (c *Certificate) EffectiveStatus() CertStatus {
-	if c.Status != "" {
-		return c.Status
-	}
-	if c.Deleted {
-		return CertStatusDeleting
-	}
-	return CertStatusIssued
+// CertStorage 证书 PEM/KEY 存储接口（不再存 DB，存独立存储）
+type CertStorage interface {
+	GetCertPEM(domain string) (string, error)
+	GetKeyPEM(domain string) (string, error)
+	Save(domain, certPEM, keyPEM string) error
+	Delete(domain string) error
+	Exists(domain string) bool
 }
 
 // CertMetadata 证书解析后的元数据

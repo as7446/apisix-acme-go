@@ -66,11 +66,10 @@ func New(cfg *config.Config) (*Store, error) {
 func (s *Store) autoMigrate() error {
 	return s.DB.AutoMigrate(
 		&CertModel{},
-		&TaskModel{},
 		&AcmeAccountModel{},
-		&SyncStateModel{},
 		&VersionModel{},
 		&AgentModel{},
+		&AgentTaskModel{},
 	)
 }
 

@@ -31,23 +31,8 @@ func (c *DBCache) Load() error {
 	return nil
 }
 
-// Get 优先从 DB 读取，无则从文件系统读取
+// Get 从文件系统读取证书（CertVersion 不再存储 PEM，统一走文件系统）
 func (c *DBCache) Get(domain string) (*cert.CachedCert, bool) {
-	// 1. 尝试从 DB 读取最新版本
-	if c.certRepo.HasVersionContent(domain) {
-		version, ok := c.certRepo.GetLatestVersion(domain)
-		if ok && version != nil {
-			return &cert.CachedCert{
-				Domain:    domain,
-				CertPEM:   version.CertPEM,
-				KeyPEM:    version.PrivateKeyPEM,
-				NotBefore: version.NotBefore,
-				NotAfter:  version.NotAfter,
-			}, true
-		}
-	}
-
-	// 2. 回退到文件系统（向后兼容旧数据）
 	return c.getFromFile(domain)
 }
 
@@ -99,7 +84,7 @@ func (c *DBCache) Put(domain, certPEM, keyPEM string, notBefore, notAfter int64)
 		// 不 return，继续写文件保证基本功能
 	}
 
-	// 2. 写入文件系统（保持向后兼容）
+	// 2. 写入文件系统，供 Agent 同步任务读取证书内容。
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -124,12 +109,42 @@ func (c *DBCache) Remove(domain string) error {
 	defer c.mu.Unlock()
 	fileErr := os.RemoveAll(filepath.Join(c.dir, domain))
 
-	// 删除 DB 版本（保留元数据）
-	// 注意：这里不删除 cert_certs 记录，只删除版本
-	// 如果需要删除元数据，调用 certRepo 的 MarkDeleted
-
 	logger.Log.Info("证书缓存已删除", "domain", domain, "file_error", fileErr)
 	return fileErr
+}
+
+// Delete 删除证书文件（实现 CertStorage 接口）
+func (c *DBCache) Delete(domain string) error {
+	return c.Remove(domain)
+}
+
+// Exists 检查证书文件是否存在（实现 CertStorage 接口）
+func (c *DBCache) Exists(domain string) bool {
+	_, ok := c.getFromFile(domain)
+	return ok
+}
+
+// GetCertPEM 获取证书 PEM（实现 CertStorage 接口）
+func (c *DBCache) GetCertPEM(domain string) (string, error) {
+	data, err := os.ReadFile(c.GetCertPath(domain))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// GetKeyPEM 获取私钥 PEM（实现 CertStorage 接口）
+func (c *DBCache) GetKeyPEM(domain string) (string, error) {
+	data, err := os.ReadFile(c.GetKeyPath(domain))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// Save 保存证书 PEM（实现 CertStorage 接口）
+func (c *DBCache) Save(domain, certPEM, keyPEM string) error {
+	return c.Put(domain, certPEM, keyPEM, 0, 0)
 }
 
 // GetCertPath 获取证书文件路径

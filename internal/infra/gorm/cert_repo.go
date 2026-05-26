@@ -42,19 +42,19 @@ func (r *CertRepo) WriteCertContent(domain string, certPEM, keyPEM string) error
 
 	// 创建版本记录
 	version := &cert.CertVersion{
-		CertID:        int(model.ID),
-		Revision:      int(newRevision),
-		CertPEM:       certPEM,
-		PrivateKeyPEM: keyPEM,
-		NotBefore:     metadata.NotBefore,
-		NotAfter:      metadata.NotAfter,
-		Fingerprint:   metadata.Fingerprint,
-		SerialNumber:  metadata.SerialNumber,
-		CreatedAt:     int64(now),
+		CertID:       int(model.ID),
+		Revision:     int64(newRevision),
+		NotBefore:    metadata.NotBefore,
+		NotAfter:     metadata.NotAfter,
+		Fingerprint:  metadata.Fingerprint,
+		SerialNumber: metadata.SerialNumber,
+		CreatedAt:    int64(now),
 	}
 
 	var versionModel VersionModel
 	versionModel.FromVersion(version)
+	versionModel.CertPEM = []byte(certPEM)
+	versionModel.PrivateKeyPEM = []byte(keyPEM)
 	if err := tx.Create(&versionModel).Error; err != nil {
 		tx.Rollback()
 		return fmt.Errorf("创建版本记录失败：%w", err)
@@ -182,14 +182,25 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 		if c.CreatedAt == 0 {
 			c.CreatedAt = int64(existing.CreatedAt)
 		}
-		if !c.Deleted && existing.Deleted {
-			c.DeletedAt = 0
-		}
 		if c.Source == "" {
 			c.Source = cert.CertSource(existing.Source)
 		}
-		if c.CurrentRevision <= int(existing.CurrentRevision) {
-			c.CurrentRevision = int(existing.CurrentRevision) + 1
+		if c.LifecycleStatus == "" {
+			c.LifecycleStatus = cert.LifecycleStatus(existing.LifecycleStatus)
+		}
+		if c.SyncStatus == "" {
+			c.SyncStatus = cert.SyncStatus(existing.SyncStatus)
+		}
+		if c.ChallengeZone == "" {
+			c.ChallengeZone = existing.ChallengeZone
+		}
+		if c.SyncZones == nil && existing.SyncZones != "" && existing.SyncZones != "[]" {
+			var syncZones []string
+			parseJSONArray(existing.SyncZones, &syncZones)
+			c.SyncZones = syncZones
+		}
+		if c.Revision <= int64(existing.CurrentRevision) {
+			c.Revision = int64(existing.CurrentRevision) + 1
 		}
 	} else if err == gorm.ErrRecordNotFound {
 		// 不存在，创建
@@ -199,8 +210,8 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 		if c.Source == "" {
 			c.Source = cert.CertSourceManaged
 		}
-		if c.CurrentRevision == 0 {
-			c.CurrentRevision = 1
+		if c.Revision == 0 {
+			c.Revision = 1
 		}
 	} else {
 		return fmt.Errorf("查询证书失败：%w", err)
@@ -216,7 +227,7 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 	}
 
 	c.ID = int(model.ID)
-	logger.Log.Info("证书已保存", "domain", c.Domain, "revision", c.CurrentRevision)
+	logger.Log.Info("证书已保存", "domain", c.Domain, "revision", c.Revision)
 	return nil
 }
 
@@ -245,39 +256,52 @@ func (r *CertRepo) FindNeedRenew(renewBeforeDays int) ([]*cert.Certificate, erro
 	}
 
 	result := make([]*cert.Certificate, 0)
-	renewLockTimeout := uint64(3600) // 1小时
 	for i := range models {
-		cert := models[i].ToDomain()
-		// 检查锁是否有效
-		if cert.RenewLockAt > 0 && int64(now)-cert.RenewLockAt < int64(renewLockTimeout) {
-			continue
-		}
-		result = append(result, cert)
+		result = append(result, models[i].ToDomain())
 	}
 	return result, nil
+}
+
+func (r *CertRepo) MarkDeleting(domain string) error {
+	now := TimeNow()
+	err := r.db.Model(&CertModel{}).Where("domain = ? AND deleted = ?", domain, false).Updates(map[string]interface{}{
+		"updated_at":       now,
+		"lifecycle_status": string(cert.LifecycleDeleting),
+		"sync_status":      string(cert.SyncSyncing),
+		"sync_error":       "",
+	}).Error
+	if err != nil {
+		return fmt.Errorf("标记删除中失败：%w", err)
+	}
+	logger.Log.Info("证书已标记删除中", "domain", domain)
+	return nil
 }
 
 func (r *CertRepo) MarkDeleted(domain string) error {
 	now := TimeNow()
 	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(map[string]interface{}{
-		"deleted":    true,
-		"deleted_at": now,
-		"updated_at": now,
-		"status":     cert.CertStatusDeleting,
+		"deleted":          true,
+		"deleted_at":       now,
+		"updated_at":       now,
+		"lifecycle_status": string(cert.LifecycleDeleted),
+		"sync_status":      string(cert.SyncSynced),
+		"sync_error":       "",
+		"last_synced_at":   now,
 	}).Error
 	if err != nil {
-		return fmt.Errorf("标记删除失败：%w", err)
+		return fmt.Errorf("标记删除完成失败：%w", err)
 	}
-	logger.Log.Info("证书已标记删除", "domain", domain)
+	logger.Log.Info("证书已标记删除完成", "domain", domain)
 	return nil
 }
 
 func (r *CertRepo) RestoreDeleted(domain string) error {
 	err := r.db.Model(&CertModel{}).Where("domain = ? AND deleted = ?", domain, true).Updates(map[string]interface{}{
-		"deleted":    false,
-		"deleted_at": 0,
-		"updated_at": TimeNow(),
-		"status":     cert.CertStatusPending,
+		"deleted":          false,
+		"deleted_at":       0,
+		"updated_at":       TimeNow(),
+		"lifecycle_status": string(cert.LifecycleActive),
+		"sync_status":      string(cert.SyncDrifted),
 	}).Error
 	if err != nil {
 		return fmt.Errorf("恢复证书失败：%w", err)
@@ -286,33 +310,45 @@ func (r *CertRepo) RestoreDeleted(domain string) error {
 	return nil
 }
 
-func (r *CertRepo) SetRenewing(domain string, renewing bool, orderURL string) error {
-	updates := map[string]interface{}{
-		"renewing":   renewing,
-		"updated_at": TimeNow(),
-	}
-	if orderURL != "" {
-		updates["acme_order_url"] = orderURL
-	}
-	if renewing {
-		updates["status"] = cert.CertStatusRenewing
-	}
+// ClaimIssue 原子领取待签发证书。
+func (r *CertRepo) ClaimIssue(domain string) (bool, error) {
+	now := TimeNow()
+	result := r.db.Model(&CertModel{}).
+		Where("domain = ? AND deleted = ? AND issue_status IN ?",
+			domain, false, []string{string(cert.IssuePending), string(cert.IssueFailed)}).
+		Updates(map[string]interface{}{
+			"issue_status": string(cert.IssueIssuing),
+			"updated_at":   now,
+		})
 
+	if result.Error != nil {
+		return false, fmt.Errorf("领取签发任务失败：%w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// UpdateIssueStatus 更新签发状态
+func (r *CertRepo) UpdateIssueStatus(domain string, status cert.IssueStatus) error {
+	now := TimeNow()
+	updates := map[string]interface{}{
+		"issue_status": string(status),
+		"updated_at":   now,
+	}
 	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(updates).Error
 	if err != nil {
-		return fmt.Errorf("设置续期状态失败：%w", err)
+		return fmt.Errorf("更新签发状态失败：%w", err)
 	}
 	return nil
 }
 
-func (r *CertRepo) UpdateCertSyncState(domain string, status cert.CertStatus, syncErr string) error {
+func (r *CertRepo) UpdateCertSyncState(domain string, status cert.SyncStatus, syncErr string) error {
 	now := TimeNow()
 	updates := map[string]interface{}{
-		"status":     status,
-		"sync_error": syncErr,
-		"updated_at": now,
+		"sync_status": string(status),
+		"sync_error":  syncErr,
+		"updated_at":  now,
 	}
-	if status == cert.CertStatusIssued {
+	if status == cert.SyncSynced {
 		updates["last_synced_at"] = now
 	}
 
@@ -323,48 +359,95 @@ func (r *CertRepo) UpdateCertSyncState(domain string, status cert.CertStatus, sy
 	return nil
 }
 
-func (r *CertRepo) LockRenew(domain string) (bool, error) {
-	now := TimeNow()
-
-	// 先查询当前状态
-	var model CertModel
-	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&model).Error
+// UpdateRouting 更新证书的 Agent 路由策略
+func (r *CertRepo) UpdateRouting(domain string, challengeZone string, syncZones []string) error {
+	updates := map[string]interface{}{
+		"challenge_zone": challengeZone,
+		"sync_zones":     toJSONArray(syncZones),
+		"updated_at":     TimeNow(),
+	}
+	err := r.db.Model(&CertModel{}).Where("domain = ? AND deleted = ?", domain, false).Updates(updates).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return false, fmt.Errorf("证书不存在：%s", domain)
-		}
-		return false, fmt.Errorf("查询证书失败：%w", err)
+		return fmt.Errorf("更新证书路由策略失败：%w", err)
 	}
-
-	// 检查锁是否有效
-	if model.RenewLockAt > 0 && now-model.RenewLockAt < 3600 {
-		return false, nil
-	}
-
-	// 设置锁
-	err = r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(map[string]interface{}{
-		"renew_lock_at": now,
-		"updated_at":    now,
-	}).Error
-	if err != nil {
-		return false, fmt.Errorf("锁定续期失败：%w", err)
-	}
-	logger.Log.Debug("续期已锁定", "domain", domain)
-	return true, nil
+	return nil
 }
 
-func (r *CertRepo) UnlockRenew(domain string) error {
-	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(map[string]interface{}{
-		"renew_lock_at": 0,
-		"updated_at":    TimeNow(),
-	}).Error
+// FindByIssueStatus 查找指定签发状态的证书
+func (r *CertRepo) FindByIssueStatus(statuses []cert.IssueStatus) ([]*cert.Certificate, error) {
+	var models []CertModel
+	err := r.db.Where("issue_status IN ? AND deleted = ?", statuses, false).Find(&models).Error
 	if err != nil {
-		return fmt.Errorf("解锁续期失败：%w", err)
+		return nil, fmt.Errorf("查询签发状态失败：%w", err)
 	}
-	logger.Log.Debug("续期已解锁", "domain", domain)
-	return nil
+	result := make([]*cert.Certificate, 0, len(models))
+	for _, m := range models {
+		result = append(result, m.ToDomain())
+	}
+	return result, nil
+}
+
+// FindBySyncStatus 查找指定同步状态的证书（且 issue_status=idle）
+func (r *CertRepo) FindBySyncStatus(statuses []cert.SyncStatus) ([]*cert.Certificate, error) {
+	var models []CertModel
+	err := r.db.Where("sync_status IN ? AND issue_status = ? AND deleted = ?", statuses, string(cert.IssueIdle), false).Find(&models).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询同步状态失败：%w", err)
+	}
+	result := make([]*cert.Certificate, 0, len(models))
+	for _, m := range models {
+		result = append(result, m.ToDomain())
+	}
+	return result, nil
 }
 
 func (r *CertRepo) Close() error {
 	return nil
+}
+
+// UpdateRetryState 更新重试状态
+func (r *CertRepo) UpdateRetryState(domain string, retryCount int, nextRetryAt int64, issueStatus cert.IssueStatus, errMsg string) error {
+	now := TimeNow()
+	updates := map[string]interface{}{
+		"retry_count":   retryCount,
+		"next_retry_at": nextRetryAt,
+		"issue_status":  string(issueStatus),
+		"sync_error":    errMsg,
+		"updated_at":    now,
+	}
+	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(updates).Error
+	if err != nil {
+		return fmt.Errorf("更新重试状态失败：%w", err)
+	}
+	return nil
+}
+
+// FindRetryReady 查找已到重试时间的 failed 证书
+func (r *CertRepo) FindRetryReady(now int64) ([]*cert.Certificate, error) {
+	var models []CertModel
+	err := r.db.Where("issue_status = ? AND next_retry_at > 0 AND next_retry_at <= ? AND deleted = ?",
+		string(cert.IssueFailed), now, false).Find(&models).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询待重试证书失败：%w", err)
+	}
+	result := make([]*cert.Certificate, 0, len(models))
+	for _, m := range models {
+		result = append(result, m.ToDomain())
+	}
+	return result, nil
+}
+
+// FindRetryPending 查找所有处于重试等待中的 failed 证书（含未到期）
+func (r *CertRepo) FindRetryPending() ([]*cert.Certificate, error) {
+	var models []CertModel
+	err := r.db.Where("issue_status = ? AND next_retry_at > 0 AND deleted = ?",
+		string(cert.IssueFailed), false).Find(&models).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询重试等待中证书失败：%w", err)
+	}
+	result := make([]*cert.Certificate, 0, len(models))
+	for _, m := range models {
+		result = append(result, m.ToDomain())
+	}
+	return result, nil
 }

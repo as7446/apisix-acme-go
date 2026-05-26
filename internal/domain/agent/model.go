@@ -42,7 +42,8 @@ type RegisterResponse struct {
 
 // HeartbeatRequest 心跳请求
 type HeartbeatRequest struct {
-	AgentID string `json:"agent_id" binding:"required"`
+	AgentID  string            `json:"agent_id" binding:"required"`
+	SSLState map[string]string `json:"ssl_state"` // domain -> fingerprint（Agent 上报的网关实际 SSL 状态）
 }
 
 // HeartbeatResponse 心跳响应
@@ -60,6 +61,10 @@ type AgentRepository interface {
 	SetOffline(agentID string) error
 	// ListOnline 获取所有在线 Agent
 	ListOnline() ([]*Agent, error)
+	// ListOnlineByZone 获取指定 zone 的在线 Agent
+	ListOnlineByZone(zone string) ([]*Agent, error)
+	// ListOnlineByZones 获取指定多个 zone 的在线 Agent
+	ListOnlineByZones(zones []string) ([]*Agent, error)
 	// Get 获取 Agent
 	Get(agentID string) (*Agent, bool)
 	// ListAll 获取所有 Agent
