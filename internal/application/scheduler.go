@@ -80,8 +80,8 @@ func (s *Scheduler) ShouldRenew(c *cert.Certificate) bool {
 
 	now := time.Now().Unix()
 	if c.IssueStatus == cert.IssueFailed && c.NextRetryAt > 0 {
-		logger.Log.Info("证书处于失败重试计划中，跳过本轮续期扫描",
-			"domain", c.Domain, "next_retry_at", c.NextRetryAt)
+		//logger.Log.Info("证书处于失败重试计划中，跳过本轮续期扫描",
+		//	"domain", c.Domain, "next_retry_at", c.NextRetryAt)
 		return false
 	}
 
