@@ -105,7 +105,7 @@ func (c *GatewayClient) EnsureChallengeRoute(routeName, domain string, upstreamN
 		nodes[n] = 1
 	}
 
-	routeID := fmt.Sprintf("%s_%s", routeName, strings.ReplaceAll(domain, ".", "_"))
+	routeID := fmt.Sprintf("%s_%s", routeName, certSafeID(domain))
 	body := map[string]interface{}{
 		"uri":    "/.well-known/acme-challenge/*",
 		"host":   domain,
@@ -138,6 +138,12 @@ func (c *GatewayClient) EnsureChallengeRoute(routeName, domain string, upstreamN
 		return "", fmt.Errorf("APISIX 返回错误: status=%d body=%s", resp.StatusCode, string(respBody))
 	}
 	return routeID, nil
+}
+
+func certSafeID(domain string) string {
+	id := strings.ReplaceAll(domain, "*.", "wildcard.")
+	id = strings.ReplaceAll(id, ".", "_")
+	return strings.ReplaceAll(id, "*", "wildcard")
 }
 
 // DeleteRoute 删除路由

@@ -146,9 +146,10 @@ func (f *IssuerFSM) handleTask(ctx context.Context, task *queue.Task) error {
 	}
 
 	taskTimeout := time.Duration(f.cfg.AgentTaskTimeout) * time.Second
+	requiresHTTPChallenge := f.cfg.ChallengeRoute.Enable && !isWildcardDomain(domain)
 
 	// === Phase 1: inject_challenge ===
-	if f.cfg.ChallengeRoute.Enable {
+	if requiresHTTPChallenge {
 		_ = f.certRepo.UpdateIssueStatus(domain, cert.IssueChallengeInjecting)
 
 		// 选择 ChallengeZone 中具备 http_challenge 能力的 Agent
@@ -328,4 +329,8 @@ func (f *IssuerFSM) enqueueIssueTask(domain, action string) error {
 		Payload:   map[string]interface{}{"action": action},
 	}
 	return f.issueQueue.Enqueue(task)
+}
+
+func isWildcardDomain(domain string) bool {
+	return len(domain) > 2 && domain[:2] == "*."
 }

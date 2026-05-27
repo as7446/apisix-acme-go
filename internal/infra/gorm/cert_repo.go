@@ -197,6 +197,21 @@ func (r *CertRepo) GetLatestVersion(domain string) (*cert.CertVersion, bool) {
 	return versionModel.ToVersion(), true
 }
 
+func (r *CertRepo) GetLatestVersionContent(domain string) (*VersionModel, bool) {
+	var certModel CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&certModel).Error
+	if err != nil {
+		return nil, false
+	}
+
+	var versionModel VersionModel
+	err = r.db.Where("cert_id = ?", certModel.ID).Order("revision DESC").First(&versionModel).Error
+	if err != nil {
+		return nil, false
+	}
+	return &versionModel, true
+}
+
 // HasVersionContent 检查证书是否有版本内容
 func (r *CertRepo) HasVersionContent(domain string) bool {
 	var certModel CertModel
