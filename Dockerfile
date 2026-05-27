@@ -26,16 +26,29 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     -o /out/certmanager \
     ./cmd/certmanager
 
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build \
+    -ldflags "-s -w" \
+    -o /out/migrate-storm \
+    ./cmd/migrate-storm
+
 
 FROM registry.cn-shanghai.aliyuncs.com/sh-cloud/debian:13.5
 WORKDIR /app
 
 ENV TZ=UTC
 
+# 主程序
 COPY --from=builder /out/certmanager /usr/local/bin/certmanager
+
+# migrate 工具
+COPY --from=builder /out/migrate-storm /app/migrate-storm
+
+# 配置文件
 COPY config.controller.example.yml /app/config.controller.example.yml
 COPY config.agent.example.yml /app/config.agent.example.yml
 
+RUN chmod +x /app/migrate-storm /usr/local/bin/certmanager
 
 EXPOSE 8080
 
