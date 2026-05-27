@@ -80,6 +80,85 @@ func (r *CertRepo) WriteCertContent(domain string, certPEM, keyPEM string) error
 	return nil
 }
 
+// ImportCertContent 导入指定 revision 的证书内容，不额外递增版本号。
+func (r *CertRepo) ImportCertContent(domain string, revision int64, certPEM, keyPEM string) error {
+	if revision <= 0 {
+		revision = 1
+	}
+
+	var model CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&model).Error
+	if err != nil {
+		return fmt.Errorf("查询证书失败：%w", err)
+	}
+
+	metadata, err := cert.ParseCertMetadata(certPEM)
+	if err != nil {
+		return fmt.Errorf("解析证书失败：%w", err)
+	}
+
+	tx := r.db.Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("开启事务失败：%w", tx.Error)
+	}
+
+	var versionModel VersionModel
+	err = tx.Where("cert_id = ? AND revision = ?", model.ID, revision).First(&versionModel).Error
+	switch err {
+	case nil:
+		versionModel.CertPEM = []byte(certPEM)
+		versionModel.PrivateKeyPEM = []byte(keyPEM)
+		versionModel.NotBefore = uint64(metadata.NotBefore)
+		versionModel.NotAfter = uint64(metadata.NotAfter)
+		versionModel.Fingerprint = metadata.Fingerprint
+		versionModel.SerialNumber = metadata.SerialNumber
+		if err := tx.Save(&versionModel).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("更新版本记录失败：%w", err)
+		}
+	case gorm.ErrRecordNotFound:
+		version := &cert.CertVersion{
+			CertID:       int(model.ID),
+			Revision:     revision,
+			NotBefore:    metadata.NotBefore,
+			NotAfter:     metadata.NotAfter,
+			Fingerprint:  metadata.Fingerprint,
+			SerialNumber: metadata.SerialNumber,
+			CreatedAt:    int64(TimeNow()),
+		}
+		versionModel = VersionModel{}
+		versionModel.FromVersion(version)
+		versionModel.CertPEM = []byte(certPEM)
+		versionModel.PrivateKeyPEM = []byte(keyPEM)
+		if err := tx.Create(&versionModel).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("创建版本记录失败：%w", err)
+		}
+	default:
+		tx.Rollback()
+		return fmt.Errorf("查询版本记录失败：%w", err)
+	}
+
+	updates := map[string]interface{}{
+		"current_revision": revision,
+		"not_before":       metadata.NotBefore,
+		"not_after":        metadata.NotAfter,
+		"fingerprint":      metadata.Fingerprint,
+		"serial_number":    metadata.SerialNumber,
+	}
+	if err := tx.Model(&CertModel{}).Where("id = ?", model.ID).Updates(updates).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("更新证书元数据失败：%w", err)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("提交事务失败：%w", err)
+	}
+
+	logger.Log.Info("证书内容已导入版本表", "domain", domain, "revision", revision)
+	return nil
+}
+
 // GetVersion 获取证书指定版本内容
 func (r *CertRepo) GetVersion(domain string, revision int) (*cert.CertVersion, bool) {
 	var certModel CertModel
@@ -418,6 +497,33 @@ func (r *CertRepo) UpdateRetryState(domain string, retryCount int, nextRetryAt i
 	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(updates).Error
 	if err != nil {
 		return fmt.Errorf("更新重试状态失败：%w", err)
+	}
+	return nil
+}
+
+func (r *CertRepo) MarkRetryPendingIfDue(domain string, now int64) (bool, error) {
+	result := r.db.Model(&CertModel{}).
+		Where("domain = ? AND deleted = ? AND issue_status = ? AND next_retry_at > 0 AND next_retry_at <= ?",
+			domain, false, string(cert.IssueFailed), now).
+		Updates(map[string]interface{}{
+			"issue_status": string(cert.IssuePending),
+			"updated_at":   uint64(now),
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("标记重试 pending 失败：%w", result.Error)
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func (r *CertRepo) ClearRetryState(domain string) error {
+	err := r.db.Model(&CertModel{}).Where("domain = ?", domain).Updates(map[string]interface{}{
+		"retry_count":   0,
+		"next_retry_at": 0,
+		"sync_error":    "",
+		"updated_at":    TimeNow(),
+	}).Error
+	if err != nil {
+		return fmt.Errorf("清空重试状态失败：%w", err)
 	}
 	return nil
 }

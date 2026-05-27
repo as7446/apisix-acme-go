@@ -71,11 +71,7 @@ func (s *RetryScheduler) Start(ctx context.Context) {
 	now := time.Now().Unix()
 	for _, c := range pendingCerts {
 		if c.NextRetryAt <= now {
-			// 已到期，直接入队
-			_ = s.certRepo.UpdateIssueStatus(c.Domain, cert.IssuePending)
-			if err := s.enqueue(c.Domain, "issue"); err != nil {
-				logger.Log.Error("RetryScheduler 立即入队失败", "domain", c.Domain, "error", err)
-			}
+			s.fireRetry(c.Domain)
 		} else {
 			s.Schedule(c.Domain, c.NextRetryAt)
 		}
@@ -104,7 +100,16 @@ func (s *RetryScheduler) fireRetry(domain string) {
 	delete(s.timers, domain)
 	s.mu.Unlock()
 
-	_ = s.certRepo.UpdateIssueStatus(domain, cert.IssuePending)
+	now := time.Now().Unix()
+	claimed, err := s.certRepo.MarkRetryPendingIfDue(domain, now)
+	if err != nil {
+		logger.Log.Error("RetryScheduler 标记 pending 失败", "domain", domain, "error", err)
+		return
+	}
+	if !claimed {
+		logger.Log.Info("RetryScheduler 跳过已不满足重试条件的任务", "domain", domain)
+		return
+	}
 	if err := s.enqueue(domain, "issue"); err != nil {
 		logger.Log.Error("RetryScheduler 重试入队失败", "domain", domain, "error", err)
 		return

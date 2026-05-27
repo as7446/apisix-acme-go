@@ -139,6 +139,7 @@ func (f *IssuerFSM) handleTask(ctx context.Context, task *queue.Task) error {
 	if action == "issue" {
 		if localCert.NotAfter > time.Now().Unix() {
 			logger.Log.Info("证书已签发且未过期，跳过重复 issue 任务", "domain", domain, "not_after", localCert.NotAfter)
+			_ = f.certRepo.ClearRetryState(domain)
 			_ = f.certRepo.UpdateIssueStatus(domain, cert.IssueIdle)
 			return nil
 		}
@@ -223,6 +224,7 @@ func (f *IssuerFSM) handleTask(ctx context.Context, task *queue.Task) error {
 		return nil
 	}
 
+	_ = f.certRepo.ClearRetryState(domain)
 	_ = f.certRepo.UpdateIssueStatus(domain, cert.IssueIssued)
 
 	// === Phase 3: sync_cert → 广播到所有目标 Zone 的 Agent ===

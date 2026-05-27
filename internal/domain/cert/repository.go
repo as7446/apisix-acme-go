@@ -34,6 +34,10 @@ type CertRepository interface {
 	FindBySyncStatus(statuses []SyncStatus) ([]*Certificate, error)
 	// UpdateRetryState 更新重试状态
 	UpdateRetryState(domain string, retryCount int, nextRetryAt int64, issueStatus IssueStatus, errMsg string) error
+	// MarkRetryPendingIfDue 将已到期的 failed 重试原子切回 pending
+	MarkRetryPendingIfDue(domain string, now int64) (bool, error)
+	// ClearRetryState 清空成功签发后的重试状态
+	ClearRetryState(domain string) error
 	// FindRetryReady 查找已到重试时间的 failed 证书
 	FindRetryReady(now int64) ([]*Certificate, error)
 	// FindRetryPending 查找所有处于重试等待中的 failed 证书（含未到期）
