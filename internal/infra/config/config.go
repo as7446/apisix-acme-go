@@ -160,7 +160,7 @@ func (cfg *Config) applyDefaults() {
 		cfg.DriftCron = "0 0 * * * *"
 	}
 	if cfg.ManagedByLabel == "" {
-		cfg.ManagedByLabel = "apisix-acme-go"
+		cfg.ManagedByLabel = "certmanager"
 	}
 	if cfg.AcmeDirectoryURL == "" {
 		cfg.AcmeDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"

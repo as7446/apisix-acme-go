@@ -15,7 +15,7 @@ db:
 storage:
   local:
     base_path: "certs"
-managed_by_label: "apisix-acme-go"
+managed_by_label: "certmanager"
 
 acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
 acme_dns_provider: ""
