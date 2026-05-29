@@ -140,6 +140,7 @@ func (d *DriftDetector) handleDrift(c *cert.Certificate, driftedAgentIDs []strin
 	labels := map[string]string{
 		"managed-by":      d.cfg.ManagedByLabel,
 		"x-acme-revision": fmt.Sprintf("%d", c.Revision),
+		"x-acme-version":  fmt.Sprintf("%d", c.Revision),
 	}
 
 	syncTaskTemplate := &agenttask.AgentTask{
@@ -178,8 +179,26 @@ func (d *DriftDetector) handleDrift(c *cert.Certificate, driftedAgentIDs []strin
 			_ = d.certRepo.UpdateCertSyncState(domain, cert.SyncFailed, msg)
 		} else {
 			metrics.CertDriftRepairTotal.Add(1)
+			d.refreshAgentSSLState(domain, agentIDs, "sha256:"+c.Fingerprint)
 			_ = d.certRepo.UpdateCertSyncState(domain, cert.SyncSynced, "")
 			logger.Log.Info("漂移修复成功", "domain", domain, "agents", len(agentIDs))
 		}
 	}(c.Domain, driftedAgentIDs)
+}
+
+func (d *DriftDetector) refreshAgentSSLState(domain string, agentIDs []string, fingerprint string) {
+	for _, agentID := range agentIDs {
+		state, err := d.stateStore.GetSSLState(agentID)
+		if err != nil {
+			logger.Log.Warn("漂移修复：刷新 Agent SSL 状态失败", "domain", domain, "agent_id", agentID, "error", err)
+			continue
+		}
+		if state == nil {
+			state = make(map[string]string)
+		}
+		state[domain] = fingerprint
+		if err := d.stateStore.SaveSSLState(agentID, state); err != nil {
+			logger.Log.Warn("漂移修复：保存 Agent SSL 状态失败", "domain", domain, "agent_id", agentID, "error", err)
+		}
+	}
 }

@@ -33,6 +33,7 @@ func handleRetryState(certRepo cert.CertRepository, cfg *config.Config, schedule
 		_ = certRepo.UpdateRetryState(domain, 0, nextRetryAt, cert.IssueFailed, errMsg)
 		logger.Log.Warn("证书签发达到最大重试，进入冷却期",
 			"domain", domain,
+			"error", errMsg,
 			"cooldown_hours", cfg.CertCooldownHours,
 			"next_retry_at", nextRetryAt)
 	} else {
@@ -48,6 +49,7 @@ func handleRetryState(certRepo cert.CertRepository, cfg *config.Config, schedule
 		_ = certRepo.UpdateRetryState(domain, retryCount, nextRetryAt, cert.IssueFailed, errMsg)
 		logger.Log.Info("证书签发失败，指数退避重试",
 			"domain", domain,
+			"error", errMsg,
 			"retry_count", retryCount,
 			"delay_seconds", delay,
 			"next_retry_at", nextRetryAt)

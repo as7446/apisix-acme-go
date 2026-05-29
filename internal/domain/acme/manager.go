@@ -149,7 +149,9 @@ func (m *Manager) defaultClientInit(email string) (*lego.Client, error) {
 
 	if m.cfg.AcmeDNSProvider != "" {
 		for k, v := range m.cfg.AcmeDNSEnv {
-			_ = setEnvIfNotExists(k, v)
+			if err := setEnvFromConfig(k, v); err != nil {
+				return nil, fmt.Errorf("设置 DNS Provider 环境变量失败（%s）：%w", k, err)
+			}
 		}
 		provider, err := newDNSChallengeProviderByName(m.cfg.AcmeDNSProvider)
 		if err != nil {
@@ -265,9 +267,9 @@ func (m *Manager) ObtainCertificate(domain, email string) (certPEM, keyPEM strin
 		nil
 }
 
-func setEnvIfNotExists(k, v string) error {
-	if _, ok := os.LookupEnv(k); ok {
-		return nil
+func setEnvFromConfig(k, v string) error {
+	if strings.TrimSpace(k) == "" {
+		return fmt.Errorf("环境变量名为空")
 	}
 	return os.Setenv(k, v)
 }

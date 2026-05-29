@@ -293,7 +293,7 @@ func (r *CertRepo) Upsert(c *cert.Certificate) error {
 			parseJSONArray(existing.SyncZones, &syncZones)
 			c.SyncZones = syncZones
 		}
-		if c.Revision <= int64(existing.CurrentRevision) {
+		if c.Revision == 0 {
 			c.Revision = int64(existing.CurrentRevision) + 1
 		}
 	} else if err == gorm.ErrRecordNotFound {
