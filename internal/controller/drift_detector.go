@@ -111,12 +111,32 @@ func (d *DriftDetector) findDriftedAgents(c *cert.Certificate, syncAgents []*age
 		agentState, hasState := agentStates[a.AgentID]
 		if !hasState {
 			// Agent 没有上报任何状态 → 视为漂移
+			logger.Log.Warn("发现证书漂移：Agent 状态不存在",
+				"domain", c.Domain,
+				"agent_id", a.AgentID,
+				"expected_fingerprint", expectedFingerprint,
+				"reason", "missing_agent_state")
 			drifted = append(drifted, a.AgentID)
 			continue
 		}
 
 		fingerprint, hasDomain := agentState[c.Domain]
-		if !hasDomain || fingerprint != expectedFingerprint {
+		if !hasDomain {
+			logger.Log.Warn("发现证书漂移：Agent 未上报域名证书",
+				"domain", c.Domain,
+				"agent_id", a.AgentID,
+				"expected_fingerprint", expectedFingerprint,
+				"reason", "missing_domain")
+			drifted = append(drifted, a.AgentID)
+			continue
+		}
+		if fingerprint != expectedFingerprint {
+			logger.Log.Warn("发现证书漂移：指纹不一致",
+				"domain", c.Domain,
+				"agent_id", a.AgentID,
+				"expected_fingerprint", expectedFingerprint,
+				"actual_fingerprint", fingerprint,
+				"reason", "fingerprint_mismatch")
 			drifted = append(drifted, a.AgentID)
 		}
 	}
@@ -140,7 +160,6 @@ func (d *DriftDetector) handleDrift(c *cert.Certificate, driftedAgentIDs []strin
 	labels := map[string]string{
 		"managed-by":      d.cfg.ManagedByLabel,
 		"x-acme-revision": fmt.Sprintf("%d", c.Revision),
-		"x-acme-version":  fmt.Sprintf("%d", c.Revision),
 	}
 
 	syncTaskTemplate := &agenttask.AgentTask{
@@ -181,7 +200,7 @@ func (d *DriftDetector) handleDrift(c *cert.Certificate, driftedAgentIDs []strin
 			metrics.CertDriftRepairTotal.Add(1)
 			d.refreshAgentSSLState(domain, agentIDs, "sha256:"+c.Fingerprint)
 			_ = d.certRepo.UpdateCertSyncState(domain, cert.SyncSynced, "")
-			logger.Log.Info("漂移修复成功", "domain", domain, "agents", len(agentIDs))
+			logger.Log.Info("漂移修复成功", "domain", domain, "agents", len(agentIDs), "agent_ids", agentIDs)
 		}
 	}(c.Domain, driftedAgentIDs)
 }

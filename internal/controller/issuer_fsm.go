@@ -248,7 +248,6 @@ func (f *IssuerFSM) handleTask(ctx context.Context, task *queue.Task) error {
 	labels := map[string]string{
 		"managed-by":      f.cfg.ManagedByLabel,
 		"x-acme-revision": fmt.Sprintf("%d", localCert.Revision),
-		"x-acme-version":  fmt.Sprintf("%d", localCert.Revision),
 	}
 
 	syncTaskTemplate := &agenttask.AgentTask{
