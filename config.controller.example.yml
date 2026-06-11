@@ -1,0 +1,61 @@
+mode: "controller"
+
+listen: ":8080"
+bearer_token: "changeme"
+log_level: "info"
+default_email: "admin@example.com"
+
+db:
+  dsn: "user:pass@tcp(127.0.0.1:3306)/apisix_acme?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: 3600
+  table_prefix: "cert_"
+
+storage:
+  local:
+    base_path: "certs"
+managed_by_label: "certmanager"
+
+acme_directory_url: "https://acme-v02.api.letsencrypt.org/directory"
+acme_dns_provider: ""
+acme_dns_env: {}
+
+challenge_route:
+  enable: true
+  route_name: "apisix_acme_http01"
+  upstream_nodes:
+    - "controller-host:8080"
+  upstream_scheme: "http"
+  priority: 0
+
+renew_cron: "0 0 3 * * *"
+renew_before_days: 30
+drift_cron: "0 0 * * * *"
+recovery_cron: "0 */5 * * * *"
+
+issue_workers: 3
+queue_type: "redis"
+queue_capacity: 1000
+worker_dequeue_timeout: 5
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  key_prefix: "acme:queue"
+  pool_size: 10
+  dial_timeout: 5
+  read_timeout: 3
+  write_timeout: 3
+
+cert_retry_max: 3
+cert_retry_delay: 60
+cert_cooldown_hours: 24
+
+long_poll_timeout: 30
+agent_task_timeout: 300
+
+http_timeout: 15
+server_read_timeout: 15
+server_write_timeout: 40
