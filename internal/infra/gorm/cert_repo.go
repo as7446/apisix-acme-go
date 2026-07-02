@@ -276,7 +276,7 @@ func (r *CertRepo) GetWithDeleted(domain string) (*cert.Certificate, bool) {
 
 func (r *CertRepo) GetByAPISIXID(apisixID string) (*cert.Certificate, bool) {
 	var model CertModel
-	err := r.db.Where("apisix_id = ?", apisixID).First(&model).Error
+	err := r.db.Where("api_six_id = ?", apisixID).First(&model).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, false
@@ -385,7 +385,7 @@ func (r *CertRepo) List(query cert.CertificateListQuery) (*cert.CertificateListR
 	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
-		keywordDB := r.db.Where("domain LIKE ? OR apisix_id LIKE ?", like, like)
+		keywordDB := r.db.Where("domain LIKE ? OR api_six_id LIKE ?", like, like)
 		if numeric, err := strconv.Atoi(keyword); err == nil {
 			keywordDB = keywordDB.Or("id = ? OR current_revision = ?", numeric, numeric)
 		}

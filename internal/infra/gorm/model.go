@@ -15,7 +15,7 @@ type CertModel struct {
 	CurrentRevision uint   `gorm:"type:int unsigned;default:1" json:"current_revision"` // 当前生效版本
 	NotBefore       uint64 `gorm:"type:bigint unsigned;default:0" json:"not_before"`
 	NotAfter        uint64 `gorm:"type:bigint unsigned;default:0;index" json:"not_after"`
-	APISIXID        string `gorm:"type:varchar(255);default:'';index" json:"apisix_id"`
+	APISIXID        string `gorm:"column:api_six_id;type:varchar(255);default:'';index" json:"apisix_id"`
 	Fingerprint     string `gorm:"type:varchar(255);default:''" json:"fingerprint"`
 	SerialNumber    string `gorm:"type:varchar(255);default:''" json:"serial_number"`
 	CreatedAt       uint64 `gorm:"type:bigint unsigned;default:0" json:"created_at"`

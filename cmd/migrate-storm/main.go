@@ -290,7 +290,7 @@ func upsertCertModel(store *infragorm.Store, model *infragorm.CertModel) error {
 			"current_revision",
 			"not_before",
 			"not_after",
-			"apisix_id",
+			"api_six_id",
 			"fingerprint",
 			"serial_number",
 			"updated_at",
