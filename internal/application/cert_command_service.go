@@ -135,6 +135,56 @@ func (s *CertCommandService) RetryCert(ctx context.Context, domain string) (*Cer
 	}, nil
 }
 
+// RenewCert 手动触发证书续期。
+func (s *CertCommandService) RenewCert(ctx context.Context, domain string) (*CertStatusResult, error) {
+	c, ok := s.certRepo.Get(domain)
+	if !ok {
+		return nil, ErrCertNotFound
+	}
+	if c.Deleted {
+		return nil, ErrCertNotFound
+	}
+	if c.IssueStatus != cert.IssueIdle && c.IssueStatus != cert.IssueFailed {
+		return nil, fmt.Errorf("证书正在处理，无法续期：当前状态=%s", c.IssueStatus)
+	}
+
+	_ = s.certRepo.UpdateRetryState(domain, 0, 0, cert.IssuePending, "")
+
+	now := time.Now().Unix()
+	task := &queue.Task{
+		ID:        uuid.New().String(),
+		Type:      queue.TaskIssue,
+		Domain:    domain,
+		Priority:  0,
+		CreatedAt: now,
+		Payload:   map[string]interface{}{"action": "renew"},
+	}
+	if err := s.issueQueue.Enqueue(task); err != nil {
+		return nil, err
+	}
+
+	return &CertStatusResult{
+		ID:              c.ID,
+		Domain:          c.Domain,
+		APISIXID:        c.APISIXID,
+		Source:          c.Source,
+		LifecycleStatus: c.LifecycleStatus,
+		IssueStatus:     cert.IssuePending,
+		SyncStatus:      c.SyncStatus,
+		NotBefore:       c.NotBefore,
+		NotAfter:        c.NotAfter,
+		Revision:        c.Revision,
+		Fingerprint:     c.Fingerprint,
+		SerialNumber:    c.SerialNumber,
+		ChallengeZone:   c.ChallengeZone,
+		SyncZones:       c.SyncZones,
+		CreatedAt:       c.CreatedAt,
+		UpdatedAt:       c.UpdatedAt,
+		LastRenewAt:     c.LastRenewAt,
+		LastSyncedAt:    c.LastSyncedAt,
+	}, nil
+}
+
 // GetCertStatus 获取证书状态。
 func (s *CertCommandService) GetCertStatus(ctx context.Context, domain string) (*CertStatusResult, error) {
 	c, ok := s.certRepo.Get(domain)

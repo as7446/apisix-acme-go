@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -54,16 +55,32 @@ func (h *CertificateHandler) Create(c *gin.Context) {
 // List 获取证书列表
 // GET /v1/certificates
 func (h *CertificateHandler) List(c *gin.Context) {
-	result, err := h.certSvc.List(c.Request.Context())
+	query := application.CertListQuery{
+		Page:            intQuery(c, "page", 1),
+		PageSize:        intQuery(c, "page_size", 10),
+		Keyword:         c.Query("q"),
+		ExpireStatus:    c.Query("expire_status"),
+		LifecycleStatus: c.Query("lifecycle_status"),
+		IssueStatus:     c.Query("issue_status"),
+		SyncStatus:      c.Query("sync_status"),
+		Source:          c.Query("source"),
+		SyncZone:        c.Query("sync_zone"),
+		IncludeDeleted:  boolQuery(c, "include_deleted", false),
+	}
+
+	result, err := h.certSvc.ListPage(c.Request.Context(), query)
 	if err != nil {
 		response.InternalError(c, err.Error())
 		return
 	}
 
-	items := make([]response.CertStatusResponse, len(result))
-	for i, r := range result {
+	items := make([]response.CertStatusResponse, len(result.Items))
+	for i, r := range result.Items {
 		items[i] = response.CertStatusResponse{
+			ID:              r.ID,
 			Domain:          r.Domain,
+			APISIXID:        r.APISIXID,
+			Source:          string(r.Source),
 			LifecycleStatus: string(r.LifecycleStatus),
 			IssueStatus:     string(r.IssueStatus),
 			SyncStatus:      string(r.SyncStatus),
@@ -77,6 +94,9 @@ func (h *CertificateHandler) List(c *gin.Context) {
 			NextRetryAt:     r.NextRetryAt,
 			ChallengeZone:   r.ChallengeZone,
 			SyncZones:       r.SyncZones,
+			LastIssuedAt:    r.LastIssuedAt,
+			LastRenewAt:     r.LastRenewAt,
+			LastSyncedAt:    r.LastSyncedAt,
 			CreatedAt:       r.CreatedAt,
 			UpdatedAt:       r.UpdatedAt,
 		}
@@ -85,8 +105,10 @@ func (h *CertificateHandler) List(c *gin.Context) {
 	c.JSON(200, response.Response{
 		Code: 200,
 		Data: response.CertListResponse{
-			Total: len(items),
-			Items: items,
+			Total:    result.Total,
+			Page:     result.Page,
+			PageSize: result.PageSize,
+			Items:    items,
 		},
 	})
 }
@@ -216,9 +238,103 @@ func (h *CertificateHandler) Retry(c *gin.Context) {
 	})
 }
 
+// Renew 手动续期证书
+// POST /v1/certificates/:domain/renew
+func (h *CertificateHandler) Renew(c *gin.Context) {
+	domain := c.Param("domain")
+	if domain == "" {
+		response.BadRequest(c, errors.New("domain is required"))
+		return
+	}
+
+	result, err := h.commandSvc.RenewCert(c.Request.Context(), domain)
+	if err != nil {
+		if errors.Is(err, application.ErrCertNotFound) {
+			response.NotFound(c, "证书不存在")
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	c.JSON(200, response.Response{
+		Code:    200,
+		Message: "续期已触发",
+		Data:    certStatusFromResult(result),
+	})
+}
+
+// Sync 手动同步证书到 Agent/APISIX
+// POST /v1/certificates/:domain/sync
+func (h *CertificateHandler) Sync(c *gin.Context) {
+	domain := c.Param("domain")
+	if domain == "" {
+		response.BadRequest(c, errors.New("domain is required"))
+		return
+	}
+
+	result, err := h.certSvc.Sync(c.Request.Context(), domain)
+	if err != nil {
+		if errors.Is(err, application.ErrCertNotFound) {
+			response.NotFound(c, "证书不存在")
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	c.JSON(200, response.Response{
+		Code:    200,
+		Message: "同步完成",
+		Data:    certStatusFromResult(result),
+	})
+}
+
+// Versions 获取证书版本列表
+// GET /v1/certificates/:domain/versions
+func (h *CertificateHandler) Versions(c *gin.Context) {
+	domain := c.Param("domain")
+	if domain == "" {
+		response.BadRequest(c, errors.New("domain is required"))
+		return
+	}
+
+	versions, err := h.certSvc.ListVersions(c.Request.Context(), domain)
+	if err != nil {
+		if errors.Is(err, application.ErrCertNotFound) {
+			response.NotFound(c, "证书不存在")
+			return
+		}
+		response.InternalError(c, err.Error())
+		return
+	}
+
+	items := make([]response.CertVersionResponse, 0, len(versions))
+	for _, v := range versions {
+		items = append(items, response.CertVersionResponse{
+			ID:           v.ID,
+			CertID:       v.CertID,
+			Revision:     v.Revision,
+			NotBefore:    v.NotBefore,
+			NotAfter:     v.NotAfter,
+			Fingerprint:  v.Fingerprint,
+			SerialNumber: v.SerialNumber,
+			CreatedAt:    v.CreatedAt,
+		})
+	}
+
+	c.JSON(200, response.Response{
+		Code: 200,
+		Data: response.CertVersionListResponse{Items: items},
+	})
+}
+
 func certStatusFromResult(r *application.CertStatusResult) response.CertStatusResponse {
 	return response.CertStatusResponse{
+		ID:              r.ID,
 		Domain:          r.Domain,
+		APISIXID:        r.APISIXID,
+		Source:          string(r.Source),
 		LifecycleStatus: string(r.LifecycleStatus),
 		IssueStatus:     string(r.IssueStatus),
 		SyncStatus:      string(r.SyncStatus),
@@ -232,7 +348,34 @@ func certStatusFromResult(r *application.CertStatusResult) response.CertStatusRe
 		NextRetryAt:     r.NextRetryAt,
 		ChallengeZone:   r.ChallengeZone,
 		SyncZones:       r.SyncZones,
+		LastIssuedAt:    r.LastIssuedAt,
+		LastRenewAt:     r.LastRenewAt,
+		LastSyncedAt:    r.LastSyncedAt,
 		CreatedAt:       r.CreatedAt,
 		UpdatedAt:       r.UpdatedAt,
 	}
+}
+
+func intQuery(c *gin.Context, key string, fallback int) int {
+	raw := c.Query(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func boolQuery(c *gin.Context, key string, fallback bool) bool {
+	raw := c.Query(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
 }

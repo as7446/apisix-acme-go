@@ -42,7 +42,7 @@ CERTMANAGER_BIN := $(OUTPUT_DIR)/certmanager
 .PHONY: all build build-all build-certmanager \
 	clean install docker-build docker-buildx docker-buildx-push \
 	fmt vet lint test test-cover mod-tidy mod-download help dist dist-all \
-	version help
+	version help web-install web-dev web-build
 
 # -----------------------------------------------------------------------------
 # Default
@@ -62,6 +62,15 @@ $(CERTMANAGER_BIN):
 	@mkdir -p $(OUTPUT_DIR)
 	CGO_ENABLED=$(CGO_ENABLED) $(GO_CMD) build -ldflags "$(LDFLAGS)" \
 		-o $@ ./cmd/certmanager
+
+web-install:
+	cd web && npm install
+
+web-dev:
+	cd web && npm run dev
+
+web-build:
+	cd web && npm run build
 
 # 交叉编译 amd64
 build-amd64:

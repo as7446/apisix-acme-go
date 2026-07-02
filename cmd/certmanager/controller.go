@@ -108,9 +108,9 @@ func runController(cfg *config.Config) {
 
 	scheduler := application.NewScheduler(certRepo, certCache, cfg, issueQueue)
 	commandSvc := application.NewCertCommandService(certRepo, issueQueue)
-	certSvc := application.NewCertService(certRepo, dispatcher, time.Duration(cfg.AgentTaskTimeout)*time.Second)
+	certSvc := application.NewCertService(certRepo, certCache, dispatcher, time.Duration(cfg.AgentTaskTimeout)*time.Second, cfg.ManagedByLabel)
 
-	h := handler.NewContainer(commandSvc, certSvc, agentSvc, dispatcher, cfg)
+	h := handler.NewContainer(commandSvc, certSvc, agentSvc, dispatcher, agentTaskRepo, cfg)
 
 	cronScheduler, err := startCrons(cfg, scheduler, issuerFSM, driftDetector)
 	if err != nil {

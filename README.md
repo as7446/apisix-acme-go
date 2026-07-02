@@ -61,7 +61,42 @@ curl -X POST "http://127.0.0.1:8080/v1/certificates" \
 查询证书：
 
 ```bash
+curl "http://127.0.0.1:8080/v1/certificates?page=1&page_size=10&q=example" \
+  -H "Authorization: Bearer changeme"
+```
+
+查询单个证书：
+
+```bash
 curl "http://127.0.0.1:8080/v1/certificates/example.com" \
+  -H "Authorization: Bearer changeme"
+```
+
+手动续期：
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/certificates/example.com/renew" \
+  -H "Authorization: Bearer changeme"
+```
+
+手动同步到 Agent/APISIX：
+
+```bash
+curl -X POST "http://127.0.0.1:8080/v1/certificates/example.com/sync" \
+  -H "Authorization: Bearer changeme"
+```
+
+查询证书版本：
+
+```bash
+curl "http://127.0.0.1:8080/v1/certificates/example.com/versions" \
+  -H "Authorization: Bearer changeme"
+```
+
+查询 Agent 任务：
+
+```bash
+curl "http://127.0.0.1:8080/v1/tasks?domain=example.com&page=1&page_size=20" \
   -H "Authorization: Bearer changeme"
 ```
 

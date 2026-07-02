@@ -191,3 +191,50 @@ func (r *AgentTaskRepo) FindByDomainAndStatus(domain string, statuses []agenttas
 	}
 	return result, nil
 }
+
+func (r *AgentTaskRepo) List(query agenttask.TaskListQuery) (*agenttask.TaskListResult, error) {
+	if query.Page <= 0 {
+		query.Page = 1
+	}
+	if query.Size <= 0 {
+		query.Size = 20
+	}
+	if query.Size > 500 {
+		query.Size = 500
+	}
+
+	db := r.db.Model(&AgentTaskModel{})
+	if query.Domain != "" {
+		db = db.Where("domain = ?", query.Domain)
+	}
+	if query.AgentID != "" {
+		db = db.Where("agent_id = ?", query.AgentID)
+	}
+	if query.Type != "" && query.Type != "all" {
+		db = db.Where("type = ?", query.Type)
+	}
+	if query.Status != "" && query.Status != "all" {
+		db = db.Where("status = ?", query.Status)
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	var models []AgentTaskModel
+	offset := (query.Page - 1) * query.Size
+	if err := db.Order("created_at DESC").Offset(offset).Limit(query.Size).Find(&models).Error; err != nil {
+		return nil, err
+	}
+	items := make([]*agenttask.AgentTask, 0, len(models))
+	for i := range models {
+		items = append(items, models[i].ToDomain())
+	}
+	return &agenttask.TaskListResult{
+		Total: total,
+		Page:  query.Page,
+		Size:  query.Size,
+		Items: items,
+	}, nil
+}

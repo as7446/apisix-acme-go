@@ -1,5 +1,34 @@
 package cert
 
+// CertificateListQuery 证书列表查询条件。
+type CertificateListQuery struct {
+	Page            int
+	PageSize        int
+	Keyword         string
+	ExpireStatus    string
+	LifecycleStatus string
+	IssueStatus     string
+	SyncStatus      string
+	Source          string
+	SyncZone        string
+	IncludeDeleted  bool
+	Now             int64
+	RenewBeforeDays int
+}
+
+// CertificateListResult 证书分页查询结果。
+type CertificateListResult struct {
+	Total int64
+	Page  int
+	Size  int
+	Items []*Certificate
+}
+
+// CertVersionListResult 证书版本列表结果。
+type CertVersionListResult struct {
+	Items []*CertVersion
+}
+
 // CertRepository 证书存储抽象接口
 type CertRepository interface {
 	// Get 获取证书元数据（不含已删除）
@@ -12,6 +41,8 @@ type CertRepository interface {
 	Upsert(cert *Certificate) error
 	// All 获取所有证书
 	All() ([]*Certificate, error)
+	// List 分页查询证书
+	List(query CertificateListQuery) (*CertificateListResult, error)
 	// FindNeedRenew 查找需要续期的证书
 	FindNeedRenew(renewBeforeDays int) ([]*Certificate, error)
 	// MarkDeleting 标记证书进入删除中
@@ -42,6 +73,8 @@ type CertRepository interface {
 	FindRetryReady(now int64) ([]*Certificate, error)
 	// FindRetryPending 查找所有处于重试等待中的 failed 证书（含未到期）
 	FindRetryPending() ([]*Certificate, error)
+	// ListVersions 列出证书版本
+	ListVersions(domain string) ([]*CertVersion, error)
 	// Close 关闭存储连接
 	Close() error
 }

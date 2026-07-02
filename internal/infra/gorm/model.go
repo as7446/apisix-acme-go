@@ -70,6 +70,7 @@ func (m *CertModel) ToDomain() *cert.Certificate {
 		Deleted:         m.Deleted,
 		Source:          cert.CertSource(m.Source),
 		LastSyncedAt:    int64(m.LastSyncedAt),
+		ErrorMessage:    m.SyncError,
 		Revision:        int64(m.CurrentRevision),
 		LastIssuedAt:    int64(m.LastIssuedAt),
 		LifecycleStatus: lifecycleStatus,

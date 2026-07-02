@@ -33,7 +33,10 @@ type CertInfoResult struct {
 
 // CertStatusResult 证书状态结果（基于新状态机）
 type CertStatusResult struct {
+	ID              int                  `json:"id"`
 	Domain          string               `json:"domain"`
+	APISIXID        string               `json:"apisix_id"`
+	Source          cert.CertSource      `json:"source"`
 	LifecycleStatus cert.LifecycleStatus `json:"lifecycle_status"`
 	IssueStatus     cert.IssueStatus     `json:"issue_status"`
 	SyncStatus      cert.SyncStatus      `json:"sync_status"`
@@ -47,15 +50,41 @@ type CertStatusResult struct {
 	NextRetryAt     int64                `json:"next_retry_at"`
 	ChallengeZone   string               `json:"challenge_zone"`
 	SyncZones       []string             `json:"sync_zones"`
+	LastIssuedAt    int64                `json:"last_issued_at"`
+	LastRenewAt     int64                `json:"last_renew_at"`
+	LastSyncedAt    int64                `json:"last_synced_at"`
 	CreatedAt       int64                `json:"created_at"`
 	UpdatedAt       int64                `json:"updated_at"`
 }
 
+type CertListQuery struct {
+	Page            int
+	PageSize        int
+	Keyword         string
+	ExpireStatus    string
+	LifecycleStatus string
+	IssueStatus     string
+	SyncStatus      string
+	Source          string
+	SyncZone        string
+	IncludeDeleted  bool
+	RenewBeforeDays int
+}
+
+type CertListResult struct {
+	Total    int64               `json:"total"`
+	Page     int                 `json:"page"`
+	PageSize int                 `json:"page_size"`
+	Items    []*CertStatusResult `json:"items"`
+}
+
 // CertService 证书应用服务
 type CertService struct {
-	certRepo    cert.CertRepository
-	dispatcher  CertTaskDispatcher
-	taskTimeout time.Duration
+	certRepo       cert.CertRepository
+	certCache      cert.CertCache
+	dispatcher     CertTaskDispatcher
+	taskTimeout    time.Duration
+	managedByLabel string
 }
 
 // CertTaskDispatcher 是证书服务需要的 Agent 任务调度能力。
@@ -65,14 +94,43 @@ type CertTaskDispatcher interface {
 }
 
 // NewCertService 创建 CertService
-func NewCertService(certRepo cert.CertRepository, dispatcher CertTaskDispatcher, taskTimeout time.Duration) *CertService {
+func NewCertService(certRepo cert.CertRepository, certCache cert.CertCache, dispatcher CertTaskDispatcher, taskTimeout time.Duration, managedByLabel string) *CertService {
 	if taskTimeout <= 0 {
 		taskTimeout = 5 * time.Minute
 	}
 	return &CertService{
-		certRepo:    certRepo,
-		dispatcher:  dispatcher,
-		taskTimeout: taskTimeout,
+		certRepo:       certRepo,
+		certCache:      certCache,
+		dispatcher:     dispatcher,
+		taskTimeout:    taskTimeout,
+		managedByLabel: managedByLabel,
+	}
+}
+
+func certStatusResultFromDomain(c *cert.Certificate) *CertStatusResult {
+	return &CertStatusResult{
+		ID:              c.ID,
+		Domain:          c.Domain,
+		APISIXID:        c.APISIXID,
+		Source:          c.Source,
+		LifecycleStatus: c.LifecycleStatus,
+		IssueStatus:     c.IssueStatus,
+		SyncStatus:      c.SyncStatus,
+		NotBefore:       c.NotBefore,
+		NotAfter:        c.NotAfter,
+		Revision:        c.Revision,
+		Fingerprint:     c.Fingerprint,
+		SerialNumber:    c.SerialNumber,
+		ErrorMessage:    c.ErrorMessage,
+		RetryCount:      c.RetryCount,
+		NextRetryAt:     c.NextRetryAt,
+		ChallengeZone:   c.ChallengeZone,
+		SyncZones:       c.SyncZones,
+		LastIssuedAt:    c.LastIssuedAt,
+		LastRenewAt:     c.LastRenewAt,
+		LastSyncedAt:    c.LastSyncedAt,
+		CreatedAt:       c.CreatedAt,
+		UpdatedAt:       c.UpdatedAt,
 	}
 }
 
@@ -101,24 +159,7 @@ func (s *CertService) GetStatus(ctx context.Context, domain string) (*CertStatus
 	if !ok {
 		return nil, ErrCertNotFound
 	}
-	return &CertStatusResult{
-		Domain:          c.Domain,
-		LifecycleStatus: c.LifecycleStatus,
-		IssueStatus:     c.IssueStatus,
-		SyncStatus:      c.SyncStatus,
-		NotBefore:       c.NotBefore,
-		NotAfter:        c.NotAfter,
-		Revision:        c.Revision,
-		Fingerprint:     c.Fingerprint,
-		SerialNumber:    c.SerialNumber,
-		ErrorMessage:    c.ErrorMessage,
-		RetryCount:      c.RetryCount,
-		NextRetryAt:     c.NextRetryAt,
-		ChallengeZone:   c.ChallengeZone,
-		SyncZones:       c.SyncZones,
-		CreatedAt:       c.CreatedAt,
-		UpdatedAt:       c.UpdatedAt,
-	}, nil
+	return certStatusResultFromDomain(c), nil
 }
 
 // List 获取所有证书
@@ -133,26 +174,45 @@ func (s *CertService) List(ctx context.Context) ([]*CertStatusResult, error) {
 		if c.Deleted {
 			continue
 		}
-		results = append(results, &CertStatusResult{
-			Domain:          c.Domain,
-			LifecycleStatus: c.LifecycleStatus,
-			IssueStatus:     c.IssueStatus,
-			SyncStatus:      c.SyncStatus,
-			NotBefore:       c.NotBefore,
-			NotAfter:        c.NotAfter,
-			Revision:        c.Revision,
-			Fingerprint:     c.Fingerprint,
-			SerialNumber:    c.SerialNumber,
-			ErrorMessage:    c.ErrorMessage,
-			RetryCount:      c.RetryCount,
-			NextRetryAt:     c.NextRetryAt,
-			ChallengeZone:   c.ChallengeZone,
-			SyncZones:       c.SyncZones,
-			CreatedAt:       c.CreatedAt,
-			UpdatedAt:       c.UpdatedAt,
-		})
+		results = append(results, certStatusResultFromDomain(c))
 	}
 	return results, nil
+}
+
+func (s *CertService) ListPage(ctx context.Context, query CertListQuery) (*CertListResult, error) {
+	result, err := s.certRepo.List(cert.CertificateListQuery{
+		Page:            query.Page,
+		PageSize:        query.PageSize,
+		Keyword:         query.Keyword,
+		ExpireStatus:    query.ExpireStatus,
+		LifecycleStatus: query.LifecycleStatus,
+		IssueStatus:     query.IssueStatus,
+		SyncStatus:      query.SyncStatus,
+		Source:          query.Source,
+		SyncZone:        query.SyncZone,
+		IncludeDeleted:  query.IncludeDeleted,
+		RenewBeforeDays: query.RenewBeforeDays,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*CertStatusResult, 0, len(result.Items))
+	for _, c := range result.Items {
+		items = append(items, certStatusResultFromDomain(c))
+	}
+	return &CertListResult{
+		Total:    result.Total,
+		Page:     result.Page,
+		PageSize: result.Size,
+		Items:    items,
+	}, nil
+}
+
+func (s *CertService) ListVersions(ctx context.Context, domain string) ([]*cert.CertVersion, error) {
+	if _, ok := s.certRepo.Get(domain); !ok {
+		return nil, ErrCertNotFound
+	}
+	return s.certRepo.ListVersions(domain)
 }
 
 // UpdateRouting 更新证书的 Agent 路由策略。
@@ -183,6 +243,84 @@ func (s *CertService) UpdateRouting(ctx context.Context, domain string, challeng
 	// 路由策略变化后，标记为 drifted，下一轮 drift 检测会按新的 sync_zones 修复目标 Agent。
 	_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncDrifted, "routing policy updated")
 
+	return s.GetStatus(ctx, domain)
+}
+
+func (s *CertService) Sync(ctx context.Context, domain string) (*CertStatusResult, error) {
+	c, ok := s.certRepo.Get(domain)
+	if !ok || c.Deleted {
+		return nil, ErrCertNotFound
+	}
+	if s.dispatcher == nil {
+		return nil, errors.New("agent dispatcher not configured")
+	}
+	if s.certCache == nil {
+		return nil, errors.New("certificate cache not configured")
+	}
+
+	cached, ok := s.certCache.Get(domain)
+	if !ok {
+		_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncFailed, "certificate cache missing during manual sync")
+		return nil, errors.New("certificate cache missing")
+	}
+
+	agents, err := s.dispatcher.ListAgentsForSync(c.SyncZones)
+	if err != nil {
+		_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncFailed, err.Error())
+		return nil, fmt.Errorf("查询同步 Agent 失败: %w", err)
+	}
+	if len(agents) == 0 {
+		_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncFailed, "没有可同步的在线 Agent")
+		return nil, errors.New("没有可同步的在线 Agent")
+	}
+
+	_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncSyncing, "manual sync triggered")
+
+	apisixID := c.APISIXID
+	if apisixID == "" {
+		apisixID = cert.NormalizeAPISIXID(domain)
+	}
+	labels := map[string]string{
+		"managed-by":      s.managedByLabel,
+		"x-acme-revision": fmt.Sprintf("%d", c.Revision),
+	}
+
+	var failed int
+	var lastErr string
+	for _, a := range agents {
+		task := &agenttask.AgentTask{
+			AgentID: a.AgentID,
+			Type:    agenttask.TaskSyncCert,
+			Domain:  domain,
+			Payload: map[string]interface{}{
+				"apisix_id":  apisixID,
+				"cert_pem":   cached.CertPEM,
+				"key_pem":    cached.KeyPEM,
+				"snis":       []string{domain},
+				"expires_at": c.NotAfter,
+				"labels":     labels,
+			},
+		}
+		report, err := s.dispatcher.DispatchAndWait(task, s.taskTimeout)
+		if err != nil {
+			failed++
+			lastErr = err.Error()
+			continue
+		}
+		if report == nil || report.Status != agenttask.StatusSuccess {
+			failed++
+			if report != nil {
+				lastErr = report.ErrorMessage
+			}
+		}
+	}
+	if failed > 0 {
+		err := fmt.Errorf("手动同步证书失败: %d/%d failed, last_error=%s", failed, len(agents), lastErr)
+		_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncFailed, err.Error())
+		return nil, err
+	}
+
+	_ = s.certRepo.UpdateCertSyncState(domain, cert.SyncSynced, "")
 	return s.GetStatus(ctx, domain)
 }
 

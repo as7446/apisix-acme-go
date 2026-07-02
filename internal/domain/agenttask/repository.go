@@ -1,5 +1,23 @@
 package agenttask
 
+// TaskListQuery 任务列表查询条件。
+type TaskListQuery struct {
+	Page    int
+	Size    int
+	Domain  string
+	AgentID string
+	Type    string
+	Status  string
+}
+
+// TaskListResult 任务分页结果。
+type TaskListResult struct {
+	Total int64
+	Page  int
+	Size  int
+	Items []*AgentTask
+}
+
 // AgentTaskRepository Agent 任务持久化接口
 type AgentTaskRepository interface {
 	// Create 创建任务
@@ -16,4 +34,6 @@ type AgentTaskRepository interface {
 	FindTimedOut() ([]*AgentTask, error)
 	// FindByDomainAndStatus 按域名和状态查找任务
 	FindByDomainAndStatus(domain string, statuses []TaskStatus) ([]*AgentTask, error)
+	// List 分页查询任务
+	List(query TaskListQuery) (*TaskListResult, error)
 }

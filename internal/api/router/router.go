@@ -62,9 +62,16 @@ func New(deps *Dependencies) *gin.Engine {
 			certs.POST("", deps.H.Certificate.Create)
 			certs.GET("", deps.H.Certificate.List)
 			certs.GET("/:domain", deps.H.Certificate.Get)
+			certs.GET("/:domain/versions", deps.H.Certificate.Versions)
 			certs.PATCH("/:domain/routing", deps.H.Certificate.UpdateRouting)
 			certs.DELETE("/:domain", deps.H.Certificate.Delete)
 			certs.POST("/:domain/retry", deps.H.Certificate.Retry)
+			certs.POST("/:domain/renew", deps.H.Certificate.Renew)
+			certs.POST("/:domain/sync", deps.H.Certificate.Sync)
+		}
+
+		if deps.H.Task != nil {
+			v1.GET("/tasks", deps.H.Task.List)
 		}
 
 		// Agent 管理
@@ -97,10 +104,15 @@ func New(deps *Dependencies) *gin.Engine {
   <ul>
     <li><code>POST /v1/certificates</code> - 创建证书</li>
     <li><code>GET /v1/certificates</code> - 证书列表</li>
+    <li><code>GET /v1/certificates?page=1&page_size=10&q=example&sync_status=drifted</code> - 分页/搜索/筛选证书</li>
     <li><code>GET /v1/certificates/:domain</code> - 获取证书状态</li>
+    <li><code>GET /v1/certificates/:domain/versions</code> - 获取证书版本</li>
     <li><code>PATCH /v1/certificates/:domain/routing</code> - 更新 challenge_zone 和 sync_zones</li>
     <li><code>DELETE /v1/certificates/:domain</code> - 删除证书</li>
     <li><code>POST /v1/certificates/:domain/retry</code> - 手动重试</li>
+    <li><code>POST /v1/certificates/:domain/renew</code> - 手动续期</li>
+    <li><code>POST /v1/certificates/:domain/sync</code> - 手动同步</li>
+    <li><code>GET /v1/tasks?domain=example.com</code> - 查询 Agent 任务</li>
   </ul>
 </body>
 </html>`)

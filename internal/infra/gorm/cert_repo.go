@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"fmt"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -212,6 +213,27 @@ func (r *CertRepo) GetLatestVersionContent(domain string) (*VersionModel, bool) 
 	return &versionModel, true
 }
 
+func (r *CertRepo) ListVersions(domain string) ([]*cert.CertVersion, error) {
+	var certModel CertModel
+	err := r.db.Where("domain = ? AND deleted = ?", domain, false).First(&certModel).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, fmt.Errorf("证书不存在：%s", domain)
+		}
+		return nil, fmt.Errorf("查询证书失败：%w", err)
+	}
+
+	var models []VersionModel
+	if err := r.db.Where("cert_id = ?", certModel.ID).Order("revision DESC").Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("查询证书版本失败：%w", err)
+	}
+	result := make([]*cert.CertVersion, 0, len(models))
+	for i := range models {
+		result = append(result, models[i].ToVersion())
+	}
+	return result, nil
+}
+
 // HasVersionContent 检查证书是否有版本内容
 func (r *CertRepo) HasVersionContent(domain string) bool {
 	var certModel CertModel
@@ -337,6 +359,82 @@ func (r *CertRepo) All() ([]*cert.Certificate, error) {
 		result = append(result, models[i].ToDomain())
 	}
 	return result, nil
+}
+
+func (r *CertRepo) List(query cert.CertificateListQuery) (*cert.CertificateListResult, error) {
+	if query.Page <= 0 {
+		query.Page = 1
+	}
+	if query.PageSize <= 0 {
+		query.PageSize = 10
+	}
+	if query.PageSize > 500 {
+		query.PageSize = 500
+	}
+	if query.Now <= 0 {
+		query.Now = int64(TimeNow())
+	}
+	if query.RenewBeforeDays <= 0 {
+		query.RenewBeforeDays = 30
+	}
+
+	db := r.db.Model(&CertModel{})
+	if !query.IncludeDeleted {
+		db = db.Where("deleted = ?", false)
+	}
+	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
+		like := "%" + keyword + "%"
+		db = db.Where("domain LIKE ? OR apisix_id LIKE ? OR CAST(id AS CHAR) = ? OR CAST(current_revision AS CHAR) = ?",
+			like, like, keyword, keyword)
+	}
+	if query.LifecycleStatus != "" && query.LifecycleStatus != "all" {
+		db = db.Where("lifecycle_status = ?", query.LifecycleStatus)
+	}
+	if query.IssueStatus != "" && query.IssueStatus != "all" {
+		db = db.Where("issue_status = ?", query.IssueStatus)
+	}
+	if query.SyncStatus != "" && query.SyncStatus != "all" {
+		db = db.Where("sync_status = ?", query.SyncStatus)
+	}
+	if query.Source != "" && query.Source != "all" {
+		db = db.Where("source = ?", query.Source)
+	}
+	if query.SyncZone != "" && query.SyncZone != "all" {
+		db = db.Where("sync_zones LIKE ?", "%\""+query.SyncZone+"\"%")
+	}
+
+	switch query.ExpireStatus {
+	case "valid":
+		threshold := query.Now + int64(query.RenewBeforeDays*24*3600)
+		db = db.Where("not_after > ?", threshold)
+	case "expiring":
+		threshold := query.Now + int64(query.RenewBeforeDays*24*3600)
+		db = db.Where("not_after > ? AND not_after <= ?", query.Now, threshold)
+	case "expired":
+		db = db.Where("not_after > 0 AND not_after <= ?", query.Now)
+	}
+
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, fmt.Errorf("统计证书列表失败：%w", err)
+	}
+
+	var models []CertModel
+	offset := (query.Page - 1) * query.PageSize
+	if err := db.Order("updated_at DESC, id DESC").Offset(offset).Limit(query.PageSize).Find(&models).Error; err != nil {
+		return nil, fmt.Errorf("查询证书列表失败：%w", err)
+	}
+
+	items := make([]*cert.Certificate, 0, len(models))
+	for i := range models {
+		items = append(items, models[i].ToDomain())
+	}
+	return &cert.CertificateListResult{
+		Total: total,
+		Page:  query.Page,
+		Size:  query.PageSize,
+		Items: items,
+	}, nil
 }
 
 func (r *CertRepo) FindNeedRenew(renewBeforeDays int) ([]*cert.Certificate, error) {
