@@ -13,6 +13,7 @@ type Container struct {
 	Agent       *AgentHandler
 	AgentTask   *AgentTaskHandler
 	Task        *TaskHandler
+	DNS         *DNSHandler
 }
 
 // NewContainer 创建 Handler 容器
@@ -27,6 +28,7 @@ func NewContainer(
 	c := &Container{
 		Certificate: NewCertificateHandler(commandSvc, certSvc),
 		Agent:       NewAgentHandler(agentSvc),
+		DNS:         NewDNSHandler(),
 	}
 	if taskRepo != nil {
 		c.Task = NewTaskHandler(taskRepo)

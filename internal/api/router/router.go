@@ -73,6 +73,9 @@ func New(deps *Dependencies) *gin.Engine {
 		if deps.H.Task != nil {
 			v1.GET("/tasks", deps.H.Task.List)
 		}
+		if deps.H.DNS != nil {
+			v1.GET("/dns/check", deps.H.DNS.Check)
+		}
 
 		// Agent 管理
 		if deps.H.Agent != nil {
@@ -112,6 +115,7 @@ func New(deps *Dependencies) *gin.Engine {
     <li><code>POST /v1/certificates/:domain/retry</code> - 手动重试</li>
     <li><code>POST /v1/certificates/:domain/renew</code> - 手动续期</li>
     <li><code>POST /v1/certificates/:domain/sync</code> - 手动同步</li>
+    <li><code>GET /v1/dns/check?domain=example.com</code> - 创建证书前 DNS 校验</li>
     <li><code>GET /v1/tasks?domain=example.com</code> - 查询 Agent 任务</li>
   </ul>
 </body>

@@ -2,6 +2,7 @@ package gorm
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"gorm.io/gorm"
@@ -384,8 +385,11 @@ func (r *CertRepo) List(query cert.CertificateListQuery) (*cert.CertificateListR
 	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		like := "%" + keyword + "%"
-		db = db.Where("domain LIKE ? OR apisix_id LIKE ? OR CAST(id AS CHAR) = ? OR CAST(current_revision AS CHAR) = ?",
-			like, like, keyword, keyword)
+		keywordDB := r.db.Where("domain LIKE ? OR apisix_id LIKE ?", like, like)
+		if numeric, err := strconv.Atoi(keyword); err == nil {
+			keywordDB = keywordDB.Or("id = ? OR current_revision = ?", numeric, numeric)
+		}
+		db = db.Where(keywordDB)
 	}
 	if query.LifecycleStatus != "" && query.LifecycleStatus != "all" {
 		db = db.Where("lifecycle_status = ?", query.LifecycleStatus)
